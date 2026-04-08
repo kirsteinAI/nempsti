@@ -9,7 +9,7 @@
 //
 // CACHE_VERSION muss bei jedem Release manuell inkrementiert werden (§10.1).
 
-const CACHE_VERSION = 'v1.0.5';
+const CACHE_VERSION = 'v1.0.6';
 const CACHE_NAME = `nempsti-${CACHE_VERSION}`;
 const STALE_CLIENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const ACTIVATED_AT_KEY = 'activatedAt';
@@ -26,6 +26,7 @@ const APP_SHELL = [
   './migrations.js',
   './validation.js',
   './render.js',
+  './forecast.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

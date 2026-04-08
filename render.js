@@ -10,6 +10,7 @@
 import { escapeHtml } from './validation.js';
 import { getAppData } from './state.js';
 import { getDriveStatus, DriveStatus } from './drive.js';
+import { calculateForecast, ABSCHLUSSKONTROLLEN } from './forecast.js';
 
 let _currentDetailPatientId = null;
 let _lastRenderErrors = {}; // tabId → error
@@ -425,6 +426,177 @@ export function renderGroupsList() {
   container.innerHTML = html;
 }
 
+// ============ FORECAST TAB ============
+// Nutzt calculateForecast (reine Logik in forecast.js) und rendert zwei
+// dynamische Container:
+//   #forecast-result-container — Header, Prognose, Ergebnis-Card
+//   #forecast-intakes-list     — stufenweiser Aufnahmeplan
+// Die Parameter-Inputs (#forecast-target-hours, #forecast-exam-select, …)
+// sind statisches HTML und werden von syncForecastInputs() (app.js) gefüllt.
+
+function formatHours(h) {
+  if (!Number.isFinite(h)) return '–';
+  return h.toFixed(1).replace('.', ',');
+}
+
+function formatNumber(n, digits = 1) {
+  if (!Number.isFinite(n)) return '–';
+  return n.toFixed(digits).replace('.', ',');
+}
+
+function renderForecastResultContainer(result) {
+  const container = document.getElementById('forecast-result-container');
+  if (!container) return;
+
+  // not-ready Zustände
+  if (!result.ready) {
+    let title, body;
+    if (result.reason === 'no-exam-selected') {
+      title = 'Noch kein Abschlusstermin gewählt';
+      body = 'Wähle unten eine Abschlusskontrolle, um deinen Prüfungs-Fahrplan zu berechnen.';
+    } else if (result.reason === 'exam-in-past') {
+      title = 'Gewählter Termin liegt in der Vergangenheit';
+      body = 'Bitte wähle unten einen Termin, der nach dem heutigen Datum liegt.';
+    } else {
+      title = 'Forecast nicht berechenbar';
+      body = 'Bitte Parameter prüfen.';
+    }
+    container.innerHTML =
+      '<div class="card">' +
+        '<div class="card-title">' + escapeHtml(title) + '</div>' +
+        '<p style="font-size:0.88rem;color:var(--gray-500);">' + escapeHtml(body) + '</p>' +
+        '<div class="stats-grid" style="grid-template-columns:1fr 1fr;margin-top:12px;">' +
+          '<div class="stat-card"><div class="stat-value">' + formatHours(result.doneHours) + '</div><div class="stat-label">IST-Stunden</div></div>' +
+          '<div class="stat-card"><div class="stat-value">' + result.targetHours + '</div><div class="stat-label">Zielstunden</div></div>' +
+        '</div>' +
+      '</div>';
+    return;
+  }
+
+  // ready — vollständige Forecast-Ausgabe
+  const progressPct = result.targetHours > 0
+    ? Math.min(100, Math.max(0, (result.projectedTotal / result.targetHours) * 100))
+    : 0;
+  const doneSharePct = result.targetHours > 0
+    ? Math.min(100, Math.max(0, (result.doneHours / result.targetHours) * 100))
+    : 0;
+  const onTrack = result.onTrack;
+  const barColor = onTrack ? 'var(--success)' : 'var(--danger)';
+  const deltaH = Math.abs(result.delta);
+  const weeksUntilExam = Math.max(0, Math.round(result.weeksTotalRaw));
+
+  const excelReq = result.excelVariant.activePatientsRequired;
+  const excelPerWeek = result.excelVariant.hoursPerWeekRequired;
+  const excelReqText = Number.isFinite(excelReq) ? String(excelReq) : '–';
+  const excelPerWeekText = Number.isFinite(excelPerWeek) ? formatNumber(excelPerWeek, 1) : '–';
+
+  // Header-Card
+  let html = '';
+  html +=
+    '<div class="card">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">' +
+        '<div>' +
+          '<div style="font-size:0.8rem;color:var(--gray-500);">Abschlusskontrolle</div>' +
+          '<div style="font-size:1.1rem;font-weight:600;">' + escapeHtml(result.examLabel) + '</div>' +
+          '<div style="font-size:0.82rem;color:var(--gray-500);margin-top:2px;">' + formatDate(result.examDate) + '</div>' +
+        '</div>' +
+        '<div style="text-align:right;">' +
+          '<div style="font-size:1.4rem;font-weight:700;color:var(--primary);">' + weeksUntilExam + '</div>' +
+          '<div style="font-size:0.72rem;color:var(--gray-500);">Wochen bis Termin</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  // Prognose-Card (Balken)
+  html +=
+    '<div class="card">' +
+      '<div class="card-title">Prognose</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:6px;">' +
+        '<span>' + formatHours(result.projectedTotal) + ' / ' + result.targetHours + ' h</span>' +
+        '<span style="color:' + barColor + ';font-weight:600;">' + progressPct.toFixed(0) + ' %</span>' +
+      '</div>' +
+      '<div class="forecast-bar">' +
+        '<div class="forecast-bar-done" style="width:' + doneSharePct + '%;"></div>' +
+        '<div class="forecast-bar-projected" style="width:' + Math.max(0, progressPct - doneSharePct) + '%;background:' + barColor + ';"></div>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--gray-500);margin-top:6px;">' +
+        '<span>IST: ' + formatHours(result.doneHours) + ' h</span>' +
+        '<span>Projiziert: + ' + formatHours(result.projectedSegmentHours) + ' h</span>' +
+      '</div>' +
+    '</div>';
+
+  // Ergebnis-Card
+  const alertClass = onTrack ? 'alert-success' : 'alert-danger';
+  const alertIcon = onTrack ? '✓' : '⚠';
+  const alertHeadline = onTrack
+    ? 'Du schaffst den Termin mit + ' + formatHours(deltaH) + ' h Puffer.'
+    : 'Dir fehlen ' + formatHours(deltaH) + ' h bis zum Termin.';
+
+  html +=
+    '<div class="card">' +
+      '<div class="card-title">Ergebnis</div>' +
+      '<div class="alert ' + alertClass + '" style="margin-bottom:12px;">' +
+        '<span class="alert-icon">' + alertIcon + '</span>' +
+        '<div><strong>' + escapeHtml(alertHeadline) + '</strong></div>' +
+      '</div>' +
+      '<div style="font-size:0.85rem;color:var(--gray-700);line-height:1.6;">' +
+        '<div>Aktuell geplant: <strong>' + result.currentPatientCount + '</strong> Patient(en), Peak im Plan: <strong>' + result.peakPatientCount + '</strong></div>' +
+        '<div>Effektive Behandlungswochen bis Termin: <strong>' + formatNumber(result.effectiveWeeksTotal, 1) + '</strong></div>' +
+        '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--gray-100);">' +
+          '<div style="font-weight:600;margin-bottom:2px;">Excel-Variante (konstante Patientenzahl):</div>' +
+          'Du bräuchtest im Schnitt <strong>' + excelReqText + ' aktive Patienten/Woche</strong> ' +
+          '<span style="color:var(--gray-500);">(≈ ' + excelPerWeekText + ' h/Woche Behandlung)</span> ' +
+          'über den ganzen Zeitraum.' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  container.innerHTML = html;
+}
+
+function renderForecastIntakesList(appData, result) {
+  const container = document.getElementById('forecast-intakes-list');
+  if (!container) return;
+  const intakes = Array.isArray(appData.forecastIntakes) ? appData.forecastIntakes : [];
+  if (intakes.length === 0) {
+    container.innerHTML =
+      '<p style="font-size:0.85rem;color:var(--gray-500);font-style:italic;">' +
+      'Noch keine geplanten Aufnahmen. Klick auf "+ Aufnahme", um den Plan aufzubauen.' +
+      '</p>';
+    return;
+  }
+  const today = result && result.today ? result.today : new Date().toISOString().slice(0, 10);
+  const sorted = intakes.slice().sort((a, b) => a.date.localeCompare(b.date));
+  let html = '';
+  for (const it of sorted) {
+    const isPast = typeof it.date === 'string' && it.date <= today;
+    const pastNote = isPast
+      ? '<span style="font-size:0.7rem;color:var(--gray-500);margin-left:6px;">(vor heute — ignoriert)</span>'
+      : '';
+    html +=
+      '<div class="session-item">' +
+        '<div>' +
+          '<span class="session-date">' + formatDate(it.date) + '</span>' +
+          '<span class="session-type"> · + ' + escapeHtml(String(it.addCount)) + ' Patient(en)</span>' +
+          pastNote +
+          (it.note ? '<div style="font-size:0.78rem;color:var(--gray-500);">' + escapeHtml(it.note) + '</div>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button class="btn btn-outline btn-sm" data-action="edit-intake" data-id="' + escapeHtml(it.id) + '">Bearb.</button>' +
+          '<button class="btn btn-danger btn-sm" data-action="delete-intake" data-id="' + escapeHtml(it.id) + '">×</button>' +
+        '</div>' +
+      '</div>';
+  }
+  container.innerHTML = html;
+}
+
+export function renderForecast() {
+  const data = getAppData();
+  const result = calculateForecast(data, new Date().toISOString().slice(0, 10));
+  renderForecastResultContainer(result);
+  renderForecastIntakesList(data, result);
+}
+
 // 4-Wochen-Schwelle für den lokalen Export-Reminder (§17.5).
 // Kein UI-konfigurierbares Setting — absichtlich hardcoded, damit die
 // Export-Hygiene nicht durch User-seitiges Verstellen umgangen werden kann.
@@ -506,6 +678,7 @@ function safeRender(tabId, fn) {
 export function renderAll() {
   const start = performance.now();
   safeRender('dashboard', renderDashboard);
+  safeRender('forecast', renderForecast);
   safeRender('patients', () => {
     if (_currentDetailPatientId && document.getElementById('patient-detail-view').style.display !== 'none') {
       showPatientDetail(_currentDetailPatientId);

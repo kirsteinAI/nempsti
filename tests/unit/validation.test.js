@@ -70,8 +70,10 @@ test('generateId produces unique IDs over 1000 calls', () => {
 test('validateAppData accepts empty canonical shape', () => {
   const result = validateAppData(createEmptyAppData());
   assert.equal(result.ok, true);
-  assert.equal(result.data.version, 2);
+  assert.equal(result.data.version, 3);
   assert.equal(result.data.settings.lastLocalExportAt, null);
+  assert.equal(result.data.settings.forecast.targetHours, 600);
+  assert.deepEqual(result.data.forecastIntakes, []);
 });
 
 test('validateAppData: v1 payloads are still accepted (backwards-compat via migration)', () => {

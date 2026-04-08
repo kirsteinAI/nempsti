@@ -29,3 +29,6 @@ patientenstunden-*.json
 
 # Internal docs (architecture, reviews) — not part of deployed app
 /docs
+
+# Local source material (Excel planning aids, reference files)
+/src

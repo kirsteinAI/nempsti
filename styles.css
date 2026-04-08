@@ -379,6 +379,29 @@ body {
   transition: width 0.3s;
 }
 
+/* Forecast-Tab: zweifarbiger Stunden-Balken (IST + projiziert) */
+.forecast-bar {
+  display: flex;
+  height: 14px;
+  background: var(--gray-200);
+  border-radius: 7px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.forecast-bar-done {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.3s;
+}
+
+.forecast-bar-projected {
+  height: 100%;
+  background: var(--success);
+  opacity: 0.75;
+  transition: width 0.3s, background 0.3s;
+}
+
 /* Data Management */
 .data-actions {
   display: flex;

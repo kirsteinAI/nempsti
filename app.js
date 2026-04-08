@@ -16,8 +16,10 @@ import {
   validateAppData,
   validateSessionRecord,
   validateSupervisionRecord,
+  validateForecastIntakeRecord,
   createEmptyAppData,
 } from './validation.js';
+import { ABSCHLUSSKONTROLLEN } from './forecast.js';
 import { runMigrations, CURRENT_VERSION } from './migrations.js';
 import * as db from './db.js';
 import * as state from './state.js';
@@ -108,6 +110,7 @@ async function initApp() {
   // 6) Setting-Inputs synchronisieren.
   document.getElementById('setting-ratio').value = appData.settings.supervisionRatio;
   document.getElementById('setting-kontingent').value = appData.settings.defaultKontingent;
+  syncForecastInputs();
 
   // 7) DSGVO-Check. Wenn Zustimmung fehlt → Modal anzeigen.
   if (!appData.settings?.dsgvoAcknowledgedAt) {
@@ -183,7 +186,11 @@ function hasMeaningfulData(appData) {
   const sessionCount = Array.isArray(appData.sessions) ? appData.sessions.length : 0;
   const supervisionCount = Array.isArray(appData.supervisions) ? appData.supervisions.length : 0;
   const groupCount = Array.isArray(appData.supervisionGroups) ? appData.supervisionGroups.length : 0;
-  return patientCount + sessionCount + supervisionCount + groupCount > 0;
+  // Forecast-Intakes zählen ebenfalls als Fachinhalt: ein User, der nur den
+  // Aufnahmeplan gepflegt hat (ohne Sessions), würde sonst bei einem Fresh-
+  // Install sein eigenes Drive-Backup überschreiben können.
+  const intakeCount = Array.isArray(appData.forecastIntakes) ? appData.forecastIntakes.length : 0;
+  return patientCount + sessionCount + supervisionCount + groupCount + intakeCount > 0;
 }
 
 /**
@@ -237,6 +244,7 @@ async function performFirstDriveLoad() {
       const kontingentEl = document.getElementById('setting-kontingent');
       if (ratioEl) ratioEl.value = mig.data.settings.supervisionRatio;
       if (kontingentEl) kontingentEl.value = mig.data.settings.defaultKontingent;
+      syncForecastInputs();
       // Wenn der neue State bereits DSGVO-Zustimmung hat, DSGVO-Modal
       // schließen (wurde ggf. vorher geöffnet, bevor der Load kam).
       if (mig.data.settings && mig.data.settings.dsgvoAcknowledgedAt) {
@@ -654,6 +662,176 @@ function updateSettings() {
   });
 }
 
+// ============ FORECAST ============
+// Parameter-Inputs auf dem Forecast-Tab sind statisches HTML (siehe
+// index.html "FORECAST TAB"). Nach jedem setAppData (init, Drive-Restore,
+// Import) werden die Werte aus appData.settings.forecast in die Inputs
+// geschrieben — gleiches Pattern wie setting-ratio/setting-kontingent.
+// Die change-Handler persistieren zurück via updateAppData.
+
+function populateExamSelect() {
+  const sel = document.getElementById('forecast-exam-select');
+  if (!sel) return;
+  // HTML-Options statisch, einmalig befüllen (beim Init). Option 0 ist die
+  // bereits in index.html definierte Placeholder-Option.
+  if (sel.options.length > 1) return; // schon befüllt
+  for (const a of ABSCHLUSSKONTROLLEN) {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    // Label: "Herbst 2027 · 15.05.2027"
+    const [y, m, d] = a.date.split('-');
+    opt.textContent = `${a.label} · ${d}.${m}.${y}`;
+    sel.appendChild(opt);
+  }
+}
+
+function syncForecastInputs() {
+  const data = state.getAppData();
+  const f = (data.settings && data.settings.forecast) || {};
+  populateExamSelect();
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v;
+  };
+  set('forecast-exam-select',      f.abschlusskontrolleId || '');
+  set('forecast-target-hours',      f.targetHours != null ? f.targetHours : 600);
+  set('forecast-current-patients',  f.currentPatientCount != null ? f.currentPatientCount : 0);
+  set('forecast-sick-wpy',          f.sickWeeksPerYear != null ? f.sickWeeksPerYear : 4);
+  set('forecast-vacation-wpy',      f.vacationWeeksPerYear != null ? f.vacationWeeksPerYear : 6);
+  set('forecast-dropout-pct',       Math.round(((f.dropoutRate != null ? f.dropoutRate : 0.30)) * 100));
+  set('forecast-start-override',    f.startDateOverride || '');
+}
+
+function onForecastParamChange(event) {
+  // Gemeinsamer change-Handler für alle Forecast-Parameter-Inputs.
+  // Liest den konkreten Input anhand seiner ID und validiert vor Persist.
+  const id = event.target.id;
+  let patch = null;
+
+  const parseInt0 = (el, fallback) => {
+    const v = parseInt(el.value, 10);
+    return Number.isFinite(v) ? v : fallback;
+  };
+
+  if (id === 'forecast-exam-select') {
+    const v = event.target.value;
+    patch = f => { f.abschlusskontrolleId = v || null; };
+  } else if (id === 'forecast-target-hours') {
+    const n = parseInt0(event.target, 600);
+    if (n <= 0) { showToast('Zielstunden müssen positiv sein.', 'warning'); syncForecastInputs(); return; }
+    patch = f => { f.targetHours = n; };
+  } else if (id === 'forecast-current-patients') {
+    const n = parseInt0(event.target, 0);
+    if (n < 0) { showToast('Anzahl darf nicht negativ sein.', 'warning'); syncForecastInputs(); return; }
+    patch = f => { f.currentPatientCount = n; };
+  } else if (id === 'forecast-sick-wpy') {
+    const n = parseInt0(event.target, 4);
+    if (n < 0) { showToast('Wochenanzahl darf nicht negativ sein.', 'warning'); syncForecastInputs(); return; }
+    patch = f => { f.sickWeeksPerYear = n; };
+  } else if (id === 'forecast-vacation-wpy') {
+    const n = parseInt0(event.target, 6);
+    if (n < 0) { showToast('Wochenanzahl darf nicht negativ sein.', 'warning'); syncForecastInputs(); return; }
+    patch = f => { f.vacationWeeksPerYear = n; };
+  } else if (id === 'forecast-dropout-pct') {
+    const pct = parseInt0(event.target, 30);
+    if (pct < 0 || pct >= 100) {
+      showToast('Ausfallquote muss zwischen 0 und 99 % liegen.', 'warning');
+      syncForecastInputs();
+      return;
+    }
+    patch = f => { f.dropoutRate = pct / 100; };
+  } else if (id === 'forecast-start-override') {
+    const v = event.target.value;
+    if (v && !FORMAT.DATE_PATTERN.test(v)) { showToast('Ungültiges Datumsformat.', 'warning'); return; }
+    patch = f => { f.startDateOverride = v || null; };
+  }
+
+  if (!patch) return;
+  state.updateAppData(data => {
+    if (!data.settings.forecast) {
+      data.settings.forecast = {
+        abschlusskontrolleId: null, targetHours: 600, sickWeeksPerYear: 4,
+        vacationWeeksPerYear: 6, dropoutRate: 0.30, currentPatientCount: 0,
+        startDateOverride: null,
+      };
+    }
+    patch(data.settings.forecast);
+  });
+}
+
+// -------- Intake Modal (Forecast-Aufnahmeplan) --------
+function openIntakeModal(editId) {
+  const data = state.getAppData();
+  document.getElementById('intake-edit-id').value = editId || '';
+  document.getElementById('modal-intake-title').textContent = editId ? 'Aufnahme bearbeiten' : 'Neue Aufnahme';
+  document.getElementById('intake-error').style.display = 'none';
+
+  if (editId) {
+    const existing = (data.forecastIntakes || []).find(it => it.id === editId);
+    if (existing) {
+      document.getElementById('intake-date').value = existing.date;
+      document.getElementById('intake-add-count').value = existing.addCount;
+      document.getElementById('intake-note').value = existing.note || '';
+    }
+  } else {
+    // Default: heute + 4 Wochen, 1 Patient, leere Notiz
+    const d = new Date();
+    d.setDate(d.getDate() + 28);
+    document.getElementById('intake-date').value = d.toISOString().split('T')[0];
+    document.getElementById('intake-add-count').value = '1';
+    document.getElementById('intake-note').value = '';
+  }
+  openModal('modal-intake');
+}
+
+function saveIntakeClick() {
+  try {
+    const editId = document.getElementById('intake-edit-id').value;
+    const date = document.getElementById('intake-date').value;
+    const addCount = parseInt(document.getElementById('intake-add-count').value, 10);
+    const note = document.getElementById('intake-note').value.trim();
+
+    const record = {
+      id: editId || generateId(),
+      date,
+      addCount,
+      note,
+    };
+    const check = validateForecastIntakeRecord(record);
+    if (!check.ok) {
+      const err = document.getElementById('intake-error');
+      err.textContent = 'Ungültig: ' + check.error;
+      err.style.display = 'block';
+      return;
+    }
+    state.updateAppData(data => {
+      if (!Array.isArray(data.forecastIntakes)) data.forecastIntakes = [];
+      if (editId) {
+        const idx = data.forecastIntakes.findIndex(it => it.id === editId);
+        if (idx >= 0) data.forecastIntakes[idx] = record;
+        else data.forecastIntakes.push(record);
+      } else {
+        data.forecastIntakes.push(record);
+      }
+    });
+    closeModal('modal-intake');
+    showToast('Aufnahme gespeichert.', 'success');
+  } catch (err) {
+    const el = document.getElementById('intake-error');
+    el.textContent = 'Fehler: ' + (err?.message || err);
+    el.style.display = 'block';
+  }
+}
+
+function deleteIntake(id) {
+  showConfirmDialog('Aufnahme-Eintrag wirklich löschen?', () => {
+    state.updateAppData(data => {
+      data.forecastIntakes = (data.forecastIntakes || []).filter(it => it.id !== id);
+    });
+    showToast('Aufnahme gelöscht.', 'danger');
+  });
+}
+
 // ============ DATA EXPORT / IMPORT / CLEAR ============
 // Setzt den Timestamp des letzten erfolgreichen lokalen Exports.
 // Triggert §17.5: der 4-Wochen-Reminder-Banner im Daten-Tab.
@@ -769,6 +947,7 @@ function handleImportFile(event) {
           // Setting-Inputs aktualisieren
           document.getElementById('setting-ratio').value = pendingData.settings.supervisionRatio;
           document.getElementById('setting-kontingent').value = pendingData.settings.defaultKontingent;
+          syncForecastInputs();
           showToast('Daten erfolgreich importiert!', 'success');
         }
       );
@@ -846,6 +1025,7 @@ async function driveRestoreClick() {
       state.clearDriveDirty();
       document.getElementById('setting-ratio').value = mig.data.settings.supervisionRatio;
       document.getElementById('setting-kontingent').value = mig.data.settings.defaultKontingent;
+      syncForecastInputs();
       // Explizite User-Aktion "Aus Drive wiederherstellen" ist der klarste
       // mögliche Beweis, dass lokal == Drive ist. Gate auf ALLOWED setzen,
       // falls er vorher nicht schon dort war (§7.3.1).
@@ -961,6 +1141,20 @@ function wireEventHandlers() {
   document.getElementById('setting-ratio').addEventListener('change', updateSettings);
   document.getElementById('setting-kontingent').addEventListener('change', updateSettings);
 
+  // Forecast parameter inputs — gemeinsamer change-Handler.
+  for (const id of [
+    'forecast-exam-select',
+    'forecast-target-hours',
+    'forecast-current-patients',
+    'forecast-sick-wpy',
+    'forecast-vacation-wpy',
+    'forecast-dropout-pct',
+    'forecast-start-override',
+  ]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', onForecastParamChange);
+  }
+
   // Import file input
   document.getElementById('import-file').addEventListener('change', handleImportFile);
 
@@ -995,6 +1189,14 @@ function handleDataActionClick(e) {
     case 'open-group-modal':
       openGroupModal();
       break;
+    case 'open-intake-modal':
+      openIntakeModal();
+      break;
+    case 'open-intake-modal-from-fab':
+      closeModal('modal-add-choice');
+      showTab('forecast');
+      openIntakeModal();
+      break;
 
     // From patient detail
     case 'open-session-modal-for':
@@ -1016,6 +1218,9 @@ function handleDataActionClick(e) {
       break;
     case 'save-group':
       saveGroupClick();
+      break;
+    case 'save-intake':
+      saveIntakeClick();
       break;
 
     // Edit/delete
@@ -1039,6 +1244,12 @@ function handleDataActionClick(e) {
       break;
     case 'delete-group':
       deleteGroup(id);
+      break;
+    case 'edit-intake':
+      openIntakeModal(id);
+      break;
+    case 'delete-intake':
+      deleteIntake(id);
       break;
 
     // Patient list navigation

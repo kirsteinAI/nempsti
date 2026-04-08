@@ -105,6 +105,12 @@ export function validateAppData(obj) {
     if (!Array.isArray(obj.sessions)) return fail('sessions', 'required array for versioned payloads');
     if (!Array.isArray(obj.supervisions)) return fail('supervisions', 'required array for versioned payloads');
     if (!Array.isArray(obj.supervisionGroups)) return fail('supervisionGroups', 'required array for versioned payloads');
+    // forecastIntakes ist erst ab v3 Pflicht — v1/v2-Payloads müssen es nicht haben,
+    // damit der "Validator VOR Migration"-Load-Path (app.js) v1/v2-Daten nicht
+    // wegen eines Feldes bounced, das die Migration gerade erst einfügen würde.
+    if (obj.version >= 3) {
+      if (!Array.isArray(obj.forecastIntakes)) return fail('forecastIntakes', 'required array for v3 payloads');
+    }
   }
 
   // settings: optional. Wenn vorhanden, Objekt mit validen Keys.
@@ -122,6 +128,53 @@ export function validateAppData(obj) {
     }
     if (s.lastLocalExportAt !== undefined && s.lastLocalExportAt !== null && !isString(s.lastLocalExportAt)) {
       return fail('settings.lastLocalExportAt', 'must be an ISO timestamp string or null');
+    }
+    if (s.forecast !== undefined) {
+      if (!isPlainObject(s.forecast)) return fail('settings.forecast', 'not an object');
+      const f = s.forecast;
+      if (f.abschlusskontrolleId !== undefined && f.abschlusskontrolleId !== null && !isString(f.abschlusskontrolleId)) {
+        return fail('settings.forecast.abschlusskontrolleId', 'must be a string or null');
+      }
+      if (f.targetHours !== undefined && !isPositiveNumber(f.targetHours)) {
+        return fail('settings.forecast.targetHours', 'must be a positive number');
+      }
+      if (f.sickWeeksPerYear !== undefined && !isNonNegativeNumber(f.sickWeeksPerYear)) {
+        return fail('settings.forecast.sickWeeksPerYear', 'must be a non-negative number');
+      }
+      if (f.vacationWeeksPerYear !== undefined && !isNonNegativeNumber(f.vacationWeeksPerYear)) {
+        return fail('settings.forecast.vacationWeeksPerYear', 'must be a non-negative number');
+      }
+      if (f.dropoutRate !== undefined) {
+        if (!isNonNegativeNumber(f.dropoutRate) || f.dropoutRate >= 1) {
+          return fail('settings.forecast.dropoutRate', 'must be a number in [0, 1)');
+        }
+      }
+      if (f.currentPatientCount !== undefined) {
+        if (!isNonNegativeNumber(f.currentPatientCount) || !Number.isInteger(f.currentPatientCount)) {
+          return fail('settings.forecast.currentPatientCount', 'must be a non-negative integer');
+        }
+      }
+      if (f.startDateOverride !== undefined && f.startDateOverride !== null && !isDateString(f.startDateOverride)) {
+        return fail('settings.forecast.startDateOverride', 'must match YYYY-MM-DD or be null');
+      }
+    }
+  }
+
+  // forecastIntakes
+  if (obj.forecastIntakes !== undefined) {
+    if (!Array.isArray(obj.forecastIntakes)) return fail('forecastIntakes', 'not an array');
+    for (let i = 0; i < obj.forecastIntakes.length; i++) {
+      const it = obj.forecastIntakes[i];
+      const path = `forecastIntakes[${i}]`;
+      if (!isPlainObject(it)) return fail(path, 'not an object');
+      if (!isIdString(it.id)) return fail(`${path}.id`, 'invalid id pattern');
+      if (!isDateString(it.date)) return fail(`${path}.date`, 'must match YYYY-MM-DD');
+      if (typeof it.addCount !== 'number' || !Number.isInteger(it.addCount) || it.addCount <= 0) {
+        return fail(`${path}.addCount`, 'must be a positive integer');
+      }
+      if (it.note !== undefined && it.note !== null && !isString(it.note)) {
+        return fail(`${path}.note`, 'must be string ≤500 chars');
+      }
     }
   }
 
@@ -218,7 +271,7 @@ export function validateAppData(obj) {
   }
 
   // Whitelist: unbekannte Top-Level-Felder werden verworfen.
-  const allowed = new Set(['version', 'settings', 'patients', 'sessions', 'supervisions', 'supervisionGroups']);
+  const allowed = new Set(['version', 'settings', 'patients', 'sessions', 'supervisions', 'supervisionGroups', 'forecastIntakes']);
   const cleaned = {};
   for (const k of allowed) {
     if (obj[k] !== undefined) cleaned[k] = obj[k];
@@ -287,18 +340,45 @@ export function validateSupervisionRecord(s) {
   return { ok: true };
 }
 
+/**
+ * Validiert einen einzelnen Forecast-Intake-Record vor dem Persistieren.
+ * Strikte Untermenge der forecastIntakes[]-Regeln.
+ */
+export function validateForecastIntakeRecord(it) {
+  if (!isPlainObject(it)) return { ok: false, error: 'not an object' };
+  if (!isIdString(it.id)) return { ok: false, error: 'id: invalid base-36 pattern' };
+  if (!isDateString(it.date)) return { ok: false, error: 'date: must match YYYY-MM-DD' };
+  if (typeof it.addCount !== 'number' || !Number.isInteger(it.addCount) || it.addCount <= 0) {
+    return { ok: false, error: 'addCount: must be a positive integer' };
+  }
+  if (it.note !== undefined && it.note !== null && !isString(it.note)) {
+    return { ok: false, error: 'note: must be a string ≤500 chars' };
+  }
+  return { ok: true };
+}
+
 // Standard-Empty-State für frische Installationen.
 export function createEmptyAppData() {
   return {
-    version: 2,
+    version: 3,
     settings: {
       supervisionRatio: 4,
       defaultKontingent: 60,
       lastLocalExportAt: null,
+      forecast: {
+        abschlusskontrolleId: null,
+        targetHours: 600,
+        sickWeeksPerYear: 4,
+        vacationWeeksPerYear: 6,
+        dropoutRate: 0.30,
+        currentPatientCount: 0,
+        startDateOverride: null,
+      },
     },
     patients: [],
     sessions: [],
     supervisions: [],
     supervisionGroups: [],
+    forecastIntakes: [],
   };
 }

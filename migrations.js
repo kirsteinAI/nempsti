@@ -4,7 +4,7 @@
 // Regel: Einmal released, darf eine Migration nie editiert oder umsortiert
 // werden. Neue Versionen werden ans Ende angehängt.
 
-export const CURRENT_VERSION = 2;
+export const CURRENT_VERSION = 3;
 
 /**
  * MIGRATIONS[i] = { from: n, to: n+1, up: (data) => data }
@@ -56,6 +56,64 @@ export const MIGRATIONS = [
               ? data.settings.lastLocalExportAt
               : null,
         },
+      };
+    },
+  },
+  {
+    from: 2,
+    to: 3,
+    up(data) {
+      // v3: Forecast-Feature "Prüfungs-Fahrplan".
+      //
+      // Neue Felder:
+      //   settings.forecast = {
+      //     abschlusskontrolleId:    string|null — gewählter Termin aus ABSCHLUSSKONTROLLEN
+      //     targetHours:             number     — Zielstunden (default 600)
+      //     sickWeeksPerYear:        number     — Ausfallwochen/Jahr (default 4)
+      //     vacationWeeksPerYear:    number     — Urlaubswochen/Jahr (default 6)
+      //     dropoutRate:             number     — Patientenabbruchquote (default 0.30)
+      //     currentPatientCount:     number     — Startwert der Patienten-Stufenfunktion
+      //     startDateOverride:       string|null — ISO-Datum oder null (dann aus sessions)
+      //   }
+      //   forecastIntakes = []   — Stufenweise Patientenaufnahme-Plan:
+      //     { id, date: ISO, addCount: int, note?: string }
+      //
+      // Bestehende Installationen bekommen Defaults. Keine fachliche Ableitung
+      // aus den bestehenden Patienten — der User pflegt den Forecast bewusst.
+      const prevSettings = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+      const prevForecast = (prevSettings.forecast && typeof prevSettings.forecast === 'object') ? prevSettings.forecast : {};
+      return {
+        ...data,
+        settings: {
+          ...prevSettings,
+          forecast: {
+            abschlusskontrolleId:
+              typeof prevForecast.abschlusskontrolleId === 'string' ? prevForecast.abschlusskontrolleId : null,
+            targetHours:
+              typeof prevForecast.targetHours === 'number' && Number.isFinite(prevForecast.targetHours) && prevForecast.targetHours > 0
+                ? prevForecast.targetHours
+                : 600,
+            sickWeeksPerYear:
+              typeof prevForecast.sickWeeksPerYear === 'number' && Number.isFinite(prevForecast.sickWeeksPerYear) && prevForecast.sickWeeksPerYear >= 0
+                ? prevForecast.sickWeeksPerYear
+                : 4,
+            vacationWeeksPerYear:
+              typeof prevForecast.vacationWeeksPerYear === 'number' && Number.isFinite(prevForecast.vacationWeeksPerYear) && prevForecast.vacationWeeksPerYear >= 0
+                ? prevForecast.vacationWeeksPerYear
+                : 6,
+            dropoutRate:
+              typeof prevForecast.dropoutRate === 'number' && Number.isFinite(prevForecast.dropoutRate) && prevForecast.dropoutRate >= 0 && prevForecast.dropoutRate < 1
+                ? prevForecast.dropoutRate
+                : 0.30,
+            currentPatientCount:
+              typeof prevForecast.currentPatientCount === 'number' && Number.isFinite(prevForecast.currentPatientCount) && prevForecast.currentPatientCount >= 0
+                ? prevForecast.currentPatientCount
+                : 0,
+            startDateOverride:
+              typeof prevForecast.startDateOverride === 'string' ? prevForecast.startDateOverride : null,
+          },
+        },
+        forecastIntakes: Array.isArray(data.forecastIntakes) ? data.forecastIntakes.slice() : [],
       };
     },
   },

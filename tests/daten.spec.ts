@@ -49,7 +49,7 @@ test.describe('Datenpersistenz und Import/Export', () => {
 
     // JSON validieren
     const parsed = JSON.parse(exportedJson);
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
     expect(parsed.patients).toHaveLength(1);
     expect(parsed.patients[0].name).toBe('Export-Patient');
     expect(parsed.sessions).toHaveLength(1);

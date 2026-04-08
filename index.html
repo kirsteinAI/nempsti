@@ -20,6 +20,7 @@
 
 <div class="tab-nav">
   <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+  <button class="tab-btn" data-tab="forecast">Forecast</button>
   <button class="tab-btn" data-tab="patients">Patienten</button>
   <button class="tab-btn" data-tab="supervision">Supervision</button>
   <button class="tab-btn" data-tab="groups">Gruppen</button>
@@ -35,6 +36,67 @@
     <div class="card">
       <div class="card-title">Patienten-Übersicht</div>
       <div id="dashboard-patient-list"></div>
+    </div>
+  </div>
+
+  <!-- FORECAST TAB — Prüfungs-Fahrplan (§Forecast-Feature) -->
+  <div id="tab-forecast" class="tab-content">
+    <!-- Dynamic: header + projection + outcome (populated by renderForecast) -->
+    <div id="forecast-result-container"></div>
+
+    <!-- Static: parameter inputs. Values werden aus appData.settings.forecast
+         von syncForecastInputs() (app.js) gesetzt — gleiches Pattern wie
+         #setting-ratio im Daten-Tab. change-Events persistieren sofort. -->
+    <div class="card">
+      <div class="card-title">Parameter</div>
+      <div class="form-group">
+        <label>Abschlusskontrolle</label>
+        <select id="forecast-exam-select">
+          <option value="">— auswählen —</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Zielstunden</label>
+          <input type="number" id="forecast-target-hours" value="600" min="1" step="1">
+        </div>
+        <div class="form-group">
+          <label>Aktuelle Patientenzahl</label>
+          <input type="number" id="forecast-current-patients" value="0" min="0" step="1">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Ausfallwochen / Jahr</label>
+          <input type="number" id="forecast-sick-wpy" value="4" min="0" step="1">
+        </div>
+        <div class="form-group">
+          <label>Urlaubswochen / Jahr</label>
+          <input type="number" id="forecast-vacation-wpy" value="6" min="0" step="1">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Patienten-Ausfallquote (%)</label>
+          <input type="number" id="forecast-dropout-pct" value="30" min="0" max="99" step="1">
+        </div>
+        <div class="form-group">
+          <label>Start (optional)</label>
+          <input type="date" id="forecast-start-override">
+        </div>
+      </div>
+    </div>
+
+    <!-- Dynamic: stufenweiser Aufnahmeplan -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="card-title" style="margin-bottom:0;">Aufnahmeplan</div>
+        <button class="btn btn-primary btn-sm" data-action="open-intake-modal">+ Aufnahme</button>
+      </div>
+      <p style="font-size:0.82rem;color:var(--gray-500);margin-bottom:10px;">
+        Stufenweise zu erwartende Patienten. Nur Einträge nach heute fließen in den Forecast ein; vergangene Aufnahmen gelten als bereits in der aktuellen Patientenzahl enthalten.
+      </p>
+      <div id="forecast-intakes-list"></div>
     </div>
   </div>
 
@@ -282,6 +344,33 @@
   </div>
 </div>
 
+<!-- ADD/EDIT INTAKE MODAL (Forecast) -->
+<div class="modal-overlay" id="modal-intake">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-intake-title">Neue Aufnahme</h2>
+      <button class="modal-close" data-close="modal-intake">×</button>
+    </div>
+    <div>
+      <input type="hidden" id="intake-edit-id">
+      <div class="form-group">
+        <label>Datum *</label>
+        <input type="date" id="intake-date">
+      </div>
+      <div class="form-group">
+        <label>Anzahl neuer Patienten *</label>
+        <input type="number" id="intake-add-count" min="1" step="1" value="1">
+      </div>
+      <div class="form-group">
+        <label>Notiz</label>
+        <input type="text" id="intake-note" placeholder="z.B. 'nach Urlaub', 'Welle 2'">
+      </div>
+      <div id="intake-error" style="display:none;color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-intake">Speichern</button>
+    </div>
+  </div>
+</div>
+
 <!-- CONFIRM DIALOG -->
 <div class="modal-overlay" id="modal-confirm">
   <div class="modal" style="padding-bottom:24px;max-width:400px;">
@@ -316,6 +405,9 @@
       </button>
       <button class="btn btn-outline btn-block" data-action="open-supervision-modal">
         Neue Supervisionsstunde
+      </button>
+      <button class="btn btn-outline btn-block" data-action="open-intake-modal-from-fab">
+        Neue Forecast-Aufnahme
       </button>
     </div>
   </div>

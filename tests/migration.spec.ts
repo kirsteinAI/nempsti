@@ -29,7 +29,7 @@ test.describe('Migration Legacy-Single-File-HTML → CURRENT', () => {
     // Schema-Version nach Import entspricht der aktuellen CURRENT_VERSION
     // (wird beim Bump in migrations.js automatisch mitaktualisiert).
     const version = await page.evaluate(() => (window as any).__nempstiGetAppData().version);
-    expect(version).toBe(2);
+    expect(version).toBe(3);
 
     // Alle Kern-Entitäten sind erhalten.
     const counts = await page.evaluate(() => {
