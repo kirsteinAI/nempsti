@@ -11,7 +11,7 @@
 
 // Browser-OAuth-Client-ID ist per Google-Design kein Geheimnis (§4.5).
 // Muss beim Deploy auf GitHub Pages durch eine echte Client-ID ersetzt werden.
-export const GOOGLE_CLIENT_ID = 'REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com';
+export const GOOGLE_CLIENT_ID = '561083578357-vd41cb1mis1pc8il422d71rtma1g34fn.apps.googleusercontent.com';
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const BACKUP_FILENAME = 'nempsti-data.json';
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
