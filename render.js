@@ -425,7 +425,51 @@ export function renderGroupsList() {
   container.innerHTML = html;
 }
 
+// 4-Wochen-Schwelle für den lokalen Export-Reminder (§17.5).
+// Kein UI-konfigurierbares Setting — absichtlich hardcoded, damit die
+// Export-Hygiene nicht durch User-seitiges Verstellen umgangen werden kann.
+const LOCAL_EXPORT_REMINDER_DAYS = 28;
+
+function renderLocalExportReminder() {
+  const container = document.getElementById('local-export-reminder-container');
+  if (!container) return;
+  const data = getAppData();
+  const last = data && data.settings ? data.settings.lastLocalExportAt : null;
+
+  let shouldWarn = false;
+  let bodyText = '';
+  if (!last) {
+    shouldWarn = true;
+    bodyText = 'Du hast noch kein lokales Backup erstellt. Ein lokaler JSON-Export ist der einzige Wiederherstellungspfad, falls die App-Daten beschädigt werden.';
+  } else {
+    const lastTs = Date.parse(last);
+    if (!Number.isFinite(lastTs)) {
+      shouldWarn = true;
+      bodyText = 'Der Zeitstempel des letzten lokalen Backups ist unleserlich. Bitte ein neues Export erstellen.';
+    } else {
+      const ageMs = Date.now() - lastTs;
+      const thresholdMs = LOCAL_EXPORT_REMINDER_DAYS * 24 * 60 * 60 * 1000;
+      if (ageMs > thresholdMs) {
+        shouldWarn = true;
+        const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+        bodyText = `Dein letztes lokales Backup ist ${ageDays} Tage alt. Bitte ein aktuelles Export erstellen und sicher verwahren (Passwort-Manager, verschlüsselter Speicher oder zweites Cloud-Konto).`;
+      }
+    }
+  }
+
+  if (!shouldWarn) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML =
+    '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+      '<div style="font-weight:600;margin-bottom:4px;">Erinnerung: Lokales Backup empfohlen</div>' +
+      '<div style="font-size:0.83rem;">' + escapeHtml(bodyText) + '</div>' +
+    '</div>';
+}
+
 export function renderDataTab() {
+  renderLocalExportReminder();
   const container = document.getElementById('drive-status-container');
   if (!container) return;
   const { status, detail, lastSyncAt } = getDriveStatus();

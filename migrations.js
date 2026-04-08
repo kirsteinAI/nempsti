@@ -4,7 +4,7 @@
 // Regel: Einmal released, darf eine Migration nie editiert oder umsortiert
 // werden. Neue Versionen werden ans Ende angehängt.
 
-export const CURRENT_VERSION = 1;
+export const CURRENT_VERSION = 2;
 
 /**
  * MIGRATIONS[i] = { from: n, to: n+1, up: (data) => data }
@@ -34,6 +34,29 @@ export const MIGRATIONS = [
       // wäre ein anderer Schritt — hier bewahren wir den Input 1:1 und lassen
       // die Validierung vor dem Aufruf entscheiden.
       return next;
+    },
+  },
+  {
+    from: 1,
+    to: 2,
+    up(data) {
+      // v2: settings.lastLocalExportAt (ISO-Timestamp des letzten manuellen
+      // JSON-Exports über den Daten-Tab). Speist den 4-Wochen-Reminder-Banner
+      // in renderDataTab (§17.5). Default für bestehende Installationen ist
+      // `null` — das triggert sofort den Banner "Du hast noch kein lokales
+      // Backup erstellt", was bei aktiven Bestandsnutzern beabsichtigt ist,
+      // weil der Rollback-Pfad laut §17.5 ausschließlich über lokale Exporte
+      // verläuft und diese Hygiene früher begonnen werden sollte als später.
+      return {
+        ...data,
+        settings: {
+          ...(data.settings && typeof data.settings === 'object' ? data.settings : {}),
+          lastLocalExportAt:
+            data.settings && typeof data.settings.lastLocalExportAt === 'string'
+              ? data.settings.lastLocalExportAt
+              : null,
+        },
+      };
     },
   },
 ];

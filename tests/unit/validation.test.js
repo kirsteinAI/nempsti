@@ -70,7 +70,37 @@ test('generateId produces unique IDs over 1000 calls', () => {
 test('validateAppData accepts empty canonical shape', () => {
   const result = validateAppData(createEmptyAppData());
   assert.equal(result.ok, true);
-  assert.equal(result.data.version, 1);
+  assert.equal(result.data.version, 2);
+  assert.equal(result.data.settings.lastLocalExportAt, null);
+});
+
+test('validateAppData: v1 payloads are still accepted (backwards-compat via migration)', () => {
+  // v1 payloads don't carry lastLocalExportAt; the validator must still accept
+  // them because the migration system is the one that upgrades them. This
+  // guards the "validator before migration" load path from bouncing legacy
+  // data.
+  const v1 = {
+    version: 1,
+    settings: { supervisionRatio: 4, defaultKontingent: 60 },
+    patients: [],
+    sessions: [],
+    supervisions: [],
+    supervisionGroups: [],
+  };
+  const result = validateAppData(v1);
+  assert.equal(result.ok, true);
+});
+
+test('validateAppData: settings.lastLocalExportAt accepts null and ISO string, rejects other types', () => {
+  const base = createEmptyAppData();
+  // null passes (default)
+  assert.equal(validateAppData({ ...base, settings: { ...base.settings, lastLocalExportAt: null } }).ok, true);
+  // ISO string passes
+  assert.equal(validateAppData({ ...base, settings: { ...base.settings, lastLocalExportAt: '2026-04-08T12:00:00.000Z' } }).ok, true);
+  // Number is rejected
+  const bad = validateAppData({ ...base, settings: { ...base.settings, lastLocalExportAt: 12345 } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /lastLocalExportAt/);
 });
 
 test('validateAppData accepts canonical fixture from §3', () => {

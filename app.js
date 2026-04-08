@@ -526,6 +526,15 @@ function updateSettings() {
 }
 
 // ============ DATA EXPORT / IMPORT / CLEAR ============
+// Setzt den Timestamp des letzten erfolgreichen lokalen Exports.
+// Triggert §17.5: der 4-Wochen-Reminder-Banner im Daten-Tab.
+function markLocalExportCompleted() {
+  state.updateAppData(data => {
+    if (!data.settings) data.settings = { supervisionRatio: 4, defaultKontingent: 60 };
+    data.settings.lastLocalExportAt = new Date().toISOString();
+  });
+}
+
 async function exportData() {
   const json = JSON.stringify(state.getAppData(), null, 2);
   const filename = 'patientenstunden-' + new Date().toISOString().split('T')[0] + '.json';
@@ -539,6 +548,7 @@ async function exportData() {
       const writable = await handle.createWritable();
       await writable.write(json);
       await writable.close();
+      markLocalExportCompleted();
       showToast('Daten gespeichert!', 'success');
       document.getElementById('export-fallback').style.display = 'none';
       return;
@@ -547,6 +557,7 @@ async function exportData() {
     }
   }
 
+  let blobPathSucceeded = false;
   try {
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -557,8 +568,13 @@ async function exportData() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    blobPathSucceeded = true;
     showToast('Export gestartet: ' + filename, 'success');
   } catch { /* silent */ }
+
+  if (blobPathSucceeded) {
+    markLocalExportCompleted();
+  }
 
   document.getElementById('export-fallback').style.display = 'block';
   document.getElementById('export-textarea').value = json;
@@ -568,16 +584,20 @@ function copyExportData() {
   const textarea = document.getElementById('export-textarea');
   textarea.select();
   textarea.setSelectionRange(0, 99999);
+  const onCopySuccess = () => {
+    markLocalExportCompleted();
+    showToast('In Zwischenablage kopiert!', 'success');
+  };
   try {
     navigator.clipboard.writeText(textarea.value).then(
-      () => showToast('In Zwischenablage kopiert!', 'success'),
+      onCopySuccess,
       () => {
-        try { document.execCommand('copy'); showToast('In Zwischenablage kopiert!', 'success'); }
+        try { document.execCommand('copy'); onCopySuccess(); }
         catch { showToast('Bitte manuell kopieren (Strg+C / Cmd+C)', 'warning'); }
       }
     );
   } catch {
-    try { document.execCommand('copy'); showToast('In Zwischenablage kopiert!', 'success'); }
+    try { document.execCommand('copy'); onCopySuccess(); }
     catch { showToast('Bitte manuell kopieren (Strg+C / Cmd+C)', 'warning'); }
   }
 }

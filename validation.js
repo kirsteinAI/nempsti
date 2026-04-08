@@ -120,6 +120,9 @@ export function validateAppData(obj) {
     if (s.dsgvoAcknowledgedAt !== undefined && !isString(s.dsgvoAcknowledgedAt)) {
       return fail('settings.dsgvoAcknowledgedAt', 'must be a string');
     }
+    if (s.lastLocalExportAt !== undefined && s.lastLocalExportAt !== null && !isString(s.lastLocalExportAt)) {
+      return fail('settings.lastLocalExportAt', 'must be an ISO timestamp string or null');
+    }
   }
 
   // patients
@@ -287,10 +290,11 @@ export function validateSupervisionRecord(s) {
 // Standard-Empty-State für frische Installationen.
 export function createEmptyAppData() {
   return {
-    version: 1,
+    version: 2,
     settings: {
       supervisionRatio: 4,
       defaultKontingent: 60,
+      lastLocalExportAt: null,
     },
     patients: [],
     sessions: [],
