@@ -26,3 +26,6 @@ npm-debug.log*
 
 # Patient data exports (DSGVO — never commit)
 patientenstunden-*.json
+
+# Internal docs (architecture, reviews) — not part of deployed app
+/docs
