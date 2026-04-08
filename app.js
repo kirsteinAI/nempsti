@@ -114,12 +114,42 @@ async function initApp() {
     openModal('modal-dsgvo');
   }
 
-  // 8) Drive-Init im Hintergrund (blockiert nicht das erste Render).
+  // 8) Sync-Gate initialisieren (§7.3.1). Wenn lokale IDB bedeutungsvolle
+  //    Daten enthält, vertrauen wir dem lokalen Stand sofort und erlauben
+  //    Sync-OUT direkt — das ist der Normalfall für alle Folge-Sessions.
+  //    Wenn lokal leer ist (Fresh Install, Storage Eviction, PWA-Reinstall),
+  //    bleibt der Gate auf PENDING, bis ein Drive-Load bewiesen hat, was in
+  //    Drive tatsächlich steht. Schützt vor dem Überschreiben existierender
+  //    Drive-Backups mit einem leeren Zustand.
+  if (hasMeaningfulData(appData)) {
+    drive.setSyncGate(drive.SyncGate.ALLOWED);
+  } else {
+    drive.setSyncGate(drive.SyncGate.PENDING);
+  }
+
+  // 9) Drive-Status-Listener VOR initDrive registrieren, damit ein
+  //    synchron feuernder Status-Wechsel (Mock-Fall: initDrive ruft
+  //    setStatus(READY) synchron auf) vom Listener tatsächlich gesehen wird.
+  drive.onDriveStatusChange((event) => {
+    renderDataTab();
+    // Wenn Drive gerade READY geworden ist UND der Gate noch PENDING ist,
+    // starten wir den Auto-Load. Ein vorheriger FAILED wird bei erneutem
+    // READY ebenfalls zu einem Retry.
+    if (
+      event.status === drive.DriveStatus.READY &&
+      (drive.getSyncGate() === drive.SyncGate.PENDING || drive.getSyncGate() === drive.SyncGate.FAILED)
+    ) {
+      performFirstDriveLoad().catch(err => {
+        console.error('[app] first drive load failed:', err);
+      });
+    }
+  });
+
+  // 10) Drive-Init im Hintergrund (blockiert nicht das erste Render).
   drive.initDrive().catch(err => {
     console.error('[app] drive init failed:', err);
     _lastDriveError = err;
   });
-  drive.onDriveStatusChange(() => renderDataTab());
 
   // 9) Service Worker registrieren.
   registerServiceWorker();
@@ -130,6 +160,96 @@ async function initApp() {
   // 11) URL-Query ?debug=1 → Diagnose-Panel öffnen.
   if (new URLSearchParams(window.location.search).get('debug') === '1') {
     openDiagnose();
+  }
+}
+
+// ============ SYNC-GATE HELPERS (§7.3.1) ============
+
+/**
+ * Prüft, ob ein appData-Objekt bedeutungsvolle Nutzerdaten enthält. Wird in
+ * initApp verwendet, um zu entscheiden, ob der lokale Stand als vertrauens-
+ * würdig behandelt wird (→ SyncGate.ALLOWED) oder ob ein Drive-Load abgewartet
+ * werden muss (→ SyncGate.PENDING).
+ *
+ * "Bedeutungsvoll" = mindestens ein Patient, eine Sitzung, eine Supervision
+ * oder eine Supervisionsgruppe. Settings allein zählen nicht, weil ein
+ * Fresh-Install trivialerweise Settings-Defaults hat, aber keinen fachlichen
+ * Inhalt. Die DSGVO-Zustimmung zählt ebenfalls nicht — sie ist Meta-State,
+ * kein Fachdaten-Signal.
+ */
+function hasMeaningfulData(appData) {
+  if (!appData) return false;
+  const patientCount = Array.isArray(appData.patients) ? appData.patients.length : 0;
+  const sessionCount = Array.isArray(appData.sessions) ? appData.sessions.length : 0;
+  const supervisionCount = Array.isArray(appData.supervisions) ? appData.supervisions.length : 0;
+  const groupCount = Array.isArray(appData.supervisionGroups) ? appData.supervisionGroups.length : 0;
+  return patientCount + sessionCount + supervisionCount + groupCount > 0;
+}
+
+/**
+ * Lädt einmalig den Drive-Backup-Stand in die App und öffnet anschließend
+ * den Sync-Gate. Wird automatisch aus dem onDriveStatusChange-Listener
+ * aufgerufen, wenn Drive nach der Auth zum ersten Mal READY wird und der
+ * Gate noch nicht ALLOWED ist.
+ *
+ * Garantien:
+ * - Vor Aufruf von drive.restore() ist der Gate auf LOADING, sodass ein
+ *   paralleler Sync-OUT (z.B. durch eine Race mit visibilitychange) sauber
+ *   blockiert wird.
+ * - Nach erfolgreichem Load ist der Gate auf ALLOWED und der Dirty-Flag
+ *   wird explizit gecleart (local === Drive, nichts mehr zu pushen).
+ * - Bei Fehler geht der Gate auf FAILED; der nächste READY-Trigger führt
+ *   automatisch einen Retry durch.
+ * - Wenn Drive leer ist (kein Backup-File), wird lokal nichts überschrieben
+ *   und der Gate geht direkt auf ALLOWED — Drive bestätigt "noch nichts da",
+ *   Sync-OUT wird als erstes den lokalen Stand hochladen.
+ */
+async function performFirstDriveLoad() {
+  drive.setSyncGate(drive.SyncGate.LOADING);
+  try {
+    const remote = await drive.restore();
+    if (remote) {
+      // Drive hat Daten — validieren, migrieren, lokal übernehmen.
+      const validation = validateAppData(remote);
+      if (!validation.ok) {
+        throw new Error('Drive-Backup ungültig: ' + validation.error);
+      }
+      const mig = runMigrations(validation.data);
+      if (!mig.ok) {
+        if (mig.error && mig.error.includes('CURRENT_VERSION')) {
+          // §10.5: Drive hat eine neuere Schema-Version → Modal zeigen,
+          // Gate bleibt FAILED, Sync-OUT wird niemals das Drive überschreiben.
+          drive.setSyncGate(drive.SyncGate.FAILED);
+          openModal('modal-version-conflict');
+          return;
+        }
+        throw new Error('Migration des Drive-Backups fehlgeschlagen: ' + mig.error);
+      }
+      // Lokalen Stand durch Drive-Inhalt ersetzen. flagDirty: false, weil
+      // local jetzt per Definition == Drive ist.
+      state.setAppData(mig.data, { persist: true, flagDirty: false });
+      // Dirty-Flag könnte aus einer Mutation VOR dem Drive-Load stammen
+      // (z.B. DSGVO-Akzeptanz). Den explizit clearen, weil der neue State
+      // aus Drive kommt und damit "synchron" ist.
+      state.clearDriveDirty();
+      // UI-Settings-Inputs synchronisieren.
+      const ratioEl = document.getElementById('setting-ratio');
+      const kontingentEl = document.getElementById('setting-kontingent');
+      if (ratioEl) ratioEl.value = mig.data.settings.supervisionRatio;
+      if (kontingentEl) kontingentEl.value = mig.data.settings.defaultKontingent;
+      // Wenn der neue State bereits DSGVO-Zustimmung hat, DSGVO-Modal
+      // schließen (wurde ggf. vorher geöffnet, bevor der Load kam).
+      if (mig.data.settings && mig.data.settings.dsgvoAcknowledgedAt) {
+        closeModal('modal-dsgvo');
+      }
+    }
+    // Ob mit Inhalt oder leer: Übereinstimmung erreicht, Sync-OUT erlaubt.
+    drive.setSyncGate(drive.SyncGate.ALLOWED);
+  } catch (err) {
+    drive.setSyncGate(drive.SyncGate.FAILED);
+    _lastDriveError = err;
+    showToast('Drive-Load fehlgeschlagen: ' + (err?.message || err), 'danger');
+    throw err;
   }
 }
 
@@ -178,6 +298,15 @@ function registerServiceWorker() {
 // ============ VISIBILITY / DRIVE SYNC ============
 async function syncDirtyToDrive() {
   if (!state.isDriveDirty()) return;
+  // Sync-Gate-Guard (§7.3.1). Blockiert Sync-OUT, solange der Gate nicht
+  // ALLOWED ist — verhindert, dass ein noch nicht aus Drive geladener
+  // Fresh-Install-State auf Drive geschrieben wird und existierende Backups
+  // überschreibt. Der dirty-Flag bleibt gesetzt und wird beim nächsten
+  // Trigger erneut versucht, sobald der Gate ALLOWED ist.
+  if (drive.getSyncGate() !== drive.SyncGate.ALLOWED) {
+    console.info('[app] syncDirtyToDrive: gate is', drive.getSyncGate(), '— skipping');
+    return;
+  }
   try {
     await db.flushPendingWrites();
     await drive.backupNow(state.getAppData());
@@ -633,6 +762,10 @@ function handleImportFile(event) {
             pendingData.settings.dsgvoAcknowledgedAt = current.settings.dsgvoAcknowledgedAt;
           }
           state.setAppData(pendingData, { persist: true, flagDirty: true });
+          // JSON-Import ist eine explizite User-Entscheidung, den lokalen
+          // Stand zur neuen Wahrheit zu machen. Gate auf ALLOWED setzen,
+          // damit der importierte Stand auf Drive hochgeladen wird (§7.3.1).
+          drive.setSyncGate(drive.SyncGate.ALLOWED);
           // Setting-Inputs aktualisieren
           document.getElementById('setting-ratio').value = pendingData.settings.supervisionRatio;
           document.getElementById('setting-kontingent').value = pendingData.settings.defaultKontingent;
@@ -655,12 +788,40 @@ function clearAllDataClick() {
     const blank = createEmptyAppData();
     blank.settings = { ...blank.settings, dsgvoAcknowledgedAt: prevSettings?.dsgvoAcknowledgedAt };
     state.setAppData(blank, { persist: true, flagDirty: true });
+    // "Alle Daten löschen" ist eine explizite User-Aktion, den leeren Zustand
+    // zur neuen Wahrheit zu machen — inklusive Drive. Gate auf ALLOWED setzen,
+    // damit der leere Stand auch auf Drive synchronisiert wird (§7.3.1).
+    // Ohne diesen Setter würde ein Gate-PENDING-Zustand den Clear lokal wirksam
+    // machen, aber Drive unberührt lassen — und ein späterer Drive-Load würde
+    // die gelöschten Daten wieder zurückholen.
+    drive.setSyncGate(drive.SyncGate.ALLOWED);
     showToast('Alle Daten gelöscht.', 'danger');
   });
 }
 
 // ============ DRIVE UI ACTIONS ============
 async function driveBackupNowClick() {
+  // Sync-Gate-Guard (§7.3.1). Auch der manuelle "Jetzt sichern"-Button muss
+  // den Gate respektieren — ein manueller Sync-OUT bei leerem Local würde
+  // genau die Überschreibung auslösen, die der Gate verhindern soll.
+  const gate = drive.getSyncGate();
+  if (gate === drive.SyncGate.PENDING || gate === drive.SyncGate.LOADING) {
+    showToast('Drive wird noch geladen — bitte kurz warten.', 'warning');
+    return;
+  }
+  if (gate === drive.SyncGate.FAILED) {
+    // User versucht es erneut. Wir triggern den Load nochmal, und NACH
+    // erfolgreichem Load pushen wir die aktuellen lokalen Änderungen hoch.
+    try {
+      await performFirstDriveLoad();
+      if (drive.getSyncGate() !== drive.SyncGate.ALLOWED) {
+        // Load ist wieder fehlgeschlagen — Fehler wurde bereits geloggt.
+        return;
+      }
+    } catch {
+      return;
+    }
+  }
   try {
     await db.flushPendingWrites();
     await drive.backupNow(state.getAppData());
@@ -682,8 +843,13 @@ async function driveRestoreClick() {
       const mig = runMigrations(validation.data);
       if (!mig.ok) { showToast(mig.error, 'danger'); return; }
       state.setAppData(mig.data, { persist: true, flagDirty: false });
+      state.clearDriveDirty();
       document.getElementById('setting-ratio').value = mig.data.settings.supervisionRatio;
       document.getElementById('setting-kontingent').value = mig.data.settings.defaultKontingent;
+      // Explizite User-Aktion "Aus Drive wiederherstellen" ist der klarste
+      // mögliche Beweis, dass lokal == Drive ist. Gate auf ALLOWED setzen,
+      // falls er vorher nicht schon dort war (§7.3.1).
+      drive.setSyncGate(drive.SyncGate.ALLOWED);
       showToast('Aus Drive wiederhergestellt.', 'success');
     } catch (err) {
       _lastDriveError = err;

@@ -29,8 +29,33 @@ export const DriveStatus = Object.freeze({
   OFFLINE: 'offline',             // Netzwerkfehler, Sync wird beim nächsten Trigger versucht
 });
 
+/**
+ * Session-Level Sync-Gate (§7.3.1, hinzugefügt nach dem data-loss Incident
+ * am 2026-04-08). Steuert, ob Sync-OUT (Local → Drive) überhaupt erlaubt ist.
+ *
+ * Invariante: Kein Sync-OUT darf erfolgen, bevor die Session bewiesen hat,
+ * dass lokale Daten mit Drive übereinstimmen. "Übereinstimmung" wird erreicht
+ * durch:
+ *   (a) Erfolgreicher Auto-Load aus Drive in dieser Session (PENDING → ALLOWED)
+ *   (b) Vertrauenswürdiger IDB-Start mit bedeutungsvollen lokalen Daten,
+ *       gesetzt von app.js direkt nach Init (PENDING → ALLOWED)
+ *   (c) Explizite User-Aktion: "Aus Drive wiederherstellen", JSON-Import,
+ *       oder "Alle Daten löschen" (PENDING → ALLOWED)
+ *
+ * Ohne diesen Gate kann ein leerer Fresh-Install-State auf Drive geschrieben
+ * werden, bevor die existierenden Drive-Daten überhaupt gelesen wurden —
+ * genau das ist passiert und hat die Drive-Backups überschrieben.
+ */
+export const SyncGate = Object.freeze({
+  PENDING: 'pending',  // Initial: noch kein Drive-Read in dieser Session
+  LOADING: 'loading',  // Auto-Load aus Drive läuft gerade
+  ALLOWED: 'allowed',  // Übereinstimmung erreicht, Sync-OUT erlaubt
+  FAILED:  'failed',   // Load fehlgeschlagen, Sync-OUT weiterhin blockiert
+});
+
 let _status = DriveStatus.UNCONFIGURED;
 let _statusDetail = '';
+let _syncGate = SyncGate.PENDING;
 let _accessToken = null;
 let _tokenExpiresAt = 0;
 let _tokenClient = null;
@@ -39,6 +64,26 @@ let _backupFileId = null;
 let _lastSuccessfulSyncAt = null;
 let _lastSyncError = null;
 let _statusListeners = new Set();
+
+/**
+ * Liefert den aktuellen Sync-Gate-Zustand. Wird von app.js in
+ * syncDirtyToDrive() und driveBackupNowClick() geprüft.
+ */
+export function getSyncGate() {
+  return _syncGate;
+}
+
+/**
+ * Setzt den Sync-Gate-Zustand. Nur app.js darf diese Funktion aufrufen —
+ * die Zustandsübergänge sind im §7.3.1 definiert.
+ */
+export function setSyncGate(gate) {
+  if (!Object.values(SyncGate).includes(gate)) {
+    console.error('[drive] invalid sync gate value:', gate);
+    return;
+  }
+  _syncGate = gate;
+}
 
 function setStatus(status, detail = '') {
   _status = status;
@@ -99,6 +144,9 @@ function loadGISScript() {
  * Gibt synchron zurück, der eigentliche GIS-Load läuft im Hintergrund.
  */
 export async function initDrive() {
+  // Der Sync-Gate-Zustand wird von app.js VOR dem Aufruf von initDrive gesetzt
+  // (basierend darauf, ob lokale IDB bedeutungsvolle Daten hat). initDrive
+  // darf den Gate nicht überschreiben, sonst wäre diese Entscheidung verloren.
   if (isMocked()) {
     setStatus(DriveStatus.READY);
     const mock = getMock();
@@ -210,6 +258,12 @@ export async function backupNow(appData) {
   if (isMocked() === false && !isConfigured()) {
     // Backup stillschweigend überspringen, wenn Drive nicht konfiguriert ist.
     return;
+  }
+  // Sync-Gate-Guard (§7.3.1): Kein Sync-OUT, solange der Gate nicht ALLOWED ist.
+  // Schützt gegen Überschreiben eines existierenden Drive-Backups mit einem
+  // leeren Fresh-Install-State (Incident 2026-04-08).
+  if (_syncGate !== SyncGate.ALLOWED) {
+    throw new Error(`Drive-Upload blockiert: Sync-Gate ist ${_syncGate}, nicht ALLOWED. Erst nach erfolgreichem Drive-Load erlaubt.`);
   }
   setStatus(DriveStatus.SYNCING);
   try {

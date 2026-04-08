@@ -6,7 +6,7 @@ import { gotoApp } from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-test.describe('Migration Legacy-Single-File-HTML → v1', () => {
+test.describe('Migration Legacy-Single-File-HTML → CURRENT', () => {
 
   test.beforeEach(async ({ page }) => {
     await gotoApp(page);
@@ -26,9 +26,10 @@ test.describe('Migration Legacy-Single-File-HTML → v1', () => {
     await page.getByRole('button', { name: 'Bestätigen' }).click();
     await expect(page.getByText('Daten erfolgreich importiert!')).toBeVisible();
 
-    // Schema-Version nach Import ist 1.
+    // Schema-Version nach Import entspricht der aktuellen CURRENT_VERSION
+    // (wird beim Bump in migrations.js automatisch mitaktualisiert).
     const version = await page.evaluate(() => (window as any).__nempstiGetAppData().version);
-    expect(version).toBe(1);
+    expect(version).toBe(2);
 
     // Alle Kern-Entitäten sind erhalten.
     const counts = await page.evaluate(() => {
