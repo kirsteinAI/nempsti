@@ -1,0 +1,84 @@
+{
+  "$schema": "Ordnet App-Bereiche den zugehörigen Testdateien zu. 'direct' = direkt betroffene Tests, 'indirect' = indirekt betroffene Tests (z.B. Dashboard wird von Patientenänderungen beeinflusst).",
+  "bereiche": {
+    "dashboard": {
+      "beschreibung": "Dashboard-Tab: Statistiken, Patientenliste, Alerts, Stats-Grid",
+      "direct": ["tests/dashboard.spec.ts"],
+      "indirect": ["tests/patienten.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "navigation": {
+      "beschreibung": "Tab-Navigation, FAB-Button, Hinzufügen-Modal",
+      "direct": ["tests/dashboard.spec.ts"],
+      "indirect": ["tests/patienten.spec.ts", "tests/loeschen.spec.ts", "tests/daten.spec.ts"]
+    },
+    "patienten": {
+      "beschreibung": "Patienten-CRUD: Anlegen, Bearbeiten, Detailansicht, Patientenliste",
+      "direct": ["tests/patienten.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/loeschen.spec.ts", "tests/grenzwerte.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "sitzungen": {
+      "beschreibung": "Behandlungssitzungen: Anlegen, Löschen, Stundenzähler, Dauer/Typ",
+      "direct": ["tests/patienten.spec.ts", "tests/grenzwerte.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/daten.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "supervision": {
+      "beschreibung": "Supervisionssitzungen: Anlegen, Gruppen-Zuordnung, SV-Verhältnis",
+      "direct": ["tests/patienten.spec.ts", "tests/grenzwerte.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "formulare": {
+      "beschreibung": "Alle Modals/Formulare: Patient-Modal, Sitzungs-Modal, Supervisions-Modal, Gruppen-Modal",
+      "direct": ["tests/patienten.spec.ts", "tests/grenzwerte.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/loeschen.spec.ts", "tests/daten.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "loeschen": {
+      "beschreibung": "Lösch-Funktionen: Patient löschen, Sitzung löschen, Alle Daten löschen, Bestätigungsdialoge",
+      "direct": ["tests/loeschen.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/patienten.spec.ts"]
+    },
+    "daten": {
+      "beschreibung": "Daten-Tab: Export, Import, Einstellungen, Alle Daten löschen, Drive-Backup (gemockt)",
+      "direct": ["tests/daten.spec.ts", "tests/loeschen.spec.ts"],
+      "indirect": ["tests/dashboard.spec.ts", "tests/patienten.spec.ts"]
+    },
+    "gruppen": {
+      "beschreibung": "Supervisionsgruppen: CRUD, Patientenzuordnung, Auto-Auswahl bei Supervision",
+      "direct": ["tests/dashboard.spec.ts"],
+      "indirect": ["tests/patienten.spec.ts"]
+    },
+    "pwa": {
+      "beschreibung": "Service Worker, Offline-Modus, Manifest, Auto-Load, CSP",
+      "direct": ["tests/pwa.spec.ts"],
+      "indirect": ["tests/daten.spec.ts"]
+    },
+    "migration": {
+      "beschreibung": "Schema-Migrationen v0→v1, Legacy-Single-File-HTML-Import",
+      "direct": ["tests/migration.spec.ts"],
+      "indirect": ["tests/daten.spec.ts"]
+    },
+    "drive": {
+      "beschreibung": "Drive-Backup (immer gemockt), visibilitychange-Trigger, manueller Backup-Button",
+      "direct": ["tests/daten.spec.ts"],
+      "indirect": ["tests/pwa.spec.ts"]
+    },
+    "css": {
+      "beschreibung": "Styling, Layout, Responsive Design, Modals-Darstellung",
+      "direct": ["tests/dashboard.spec.ts", "tests/grenzwerte.spec.ts"],
+      "indirect": ["tests/patienten.spec.ts", "tests/loeschen.spec.ts", "tests/skalierung.spec.ts"]
+    },
+    "alle": {
+      "beschreibung": "Alle Tests (z.B. bei grundlegenden Änderungen am HTML-Gerüst oder JS-Init)",
+      "direct": [
+        "tests/dashboard.spec.ts",
+        "tests/patienten.spec.ts",
+        "tests/loeschen.spec.ts",
+        "tests/daten.spec.ts",
+        "tests/grenzwerte.spec.ts",
+        "tests/skalierung.spec.ts",
+        "tests/pwa.spec.ts",
+        "tests/migration.spec.ts"
+      ],
+      "indirect": []
+    }
+  }
+}

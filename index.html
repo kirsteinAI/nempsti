@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#2563eb">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com https://apis.google.com; connect-src 'self' https://accounts.google.com https://www.googleapis.com https://oauth2.googleapis.com; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src https://accounts.google.com; base-uri 'self'; form-action 'none'; object-src 'none'; manifest-src 'self'; worker-src 'self';">
+<title>Patientenstunden-Tracker</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="header">
+  <h1 id="app-header">Patientenstunden-Tracker</h1>
+  <div class="subtitle">PP-Ausbildung (VT) &middot; Supervision 1:4</div>
+</div>
+
+<div class="tab-nav">
+  <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+  <button class="tab-btn" data-tab="patients">Patienten</button>
+  <button class="tab-btn" data-tab="supervision">Supervision</button>
+  <button class="tab-btn" data-tab="groups">Gruppen</button>
+  <button class="tab-btn" data-tab="data">Daten</button>
+</div>
+
+<div class="content">
+
+  <!-- DASHBOARD TAB -->
+  <div id="tab-dashboard" class="tab-content active">
+    <div class="stats-grid" id="stats-grid"></div>
+    <div id="dashboard-alerts"></div>
+    <div class="card">
+      <div class="card-title">Patienten-Übersicht</div>
+      <div id="dashboard-patient-list"></div>
+    </div>
+  </div>
+
+  <!-- PATIENTS TAB -->
+  <div id="tab-patients" class="tab-content">
+    <div id="patient-list-view">
+      <div id="patients-list"></div>
+    </div>
+    <div id="patient-detail-view" style="display:none;">
+      <button class="detail-back" data-action="show-patient-list">← Zurück zur Liste</button>
+      <div id="patient-detail-content"></div>
+    </div>
+  </div>
+
+  <!-- SUPERVISION TAB -->
+  <div id="tab-supervision" class="tab-content">
+    <div id="supervision-overview"></div>
+  </div>
+
+  <!-- GROUPS TAB -->
+  <div id="tab-groups" class="tab-content">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="card-title" style="margin-bottom:0;">Supervisionsgruppen</div>
+        <button class="btn btn-primary btn-sm" data-action="open-group-modal">+ Neue Gruppe</button>
+      </div>
+      <p style="font-size:0.83rem;color:var(--gray-500);margin-bottom:12px;">
+        Lege Gruppen von Patienten an, die gemeinsam supervidiert werden. Beim Erstellen einer Supervisionssitzung kannst Du dann eine Gruppe auswählen, und alle zugehörigen Patienten werden automatisch zugeordnet.
+      </p>
+      <div id="groups-list"></div>
+    </div>
+  </div>
+
+  <!-- DATA TAB -->
+  <div id="tab-data" class="tab-content">
+    <div class="card">
+      <div class="card-title">Cloud-Backup (Google Drive)</div>
+      <p style="font-size:0.85rem;color:var(--gray-500);margin-bottom:12px;">
+        Deine Daten werden automatisch in Deinem persönlichen Google-Drive gesichert (unsichtbarer App-Bereich).
+      </p>
+      <div id="drive-status-container" style="margin-bottom:12px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" data-action="drive-backup-now">Jetzt sichern</button>
+        <button class="btn btn-outline btn-sm" data-action="drive-restore">Aus Drive wiederherstellen</button>
+        <button class="btn btn-outline btn-sm" data-action="drive-sign-in">Anmelden</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Daten exportieren</div>
+      <p style="font-size:0.85rem;color:var(--gray-500);margin-bottom:12px;">
+        Speichere alle Daten als JSON-Datei auf Deinem Gerät.
+      </p>
+      <button class="btn btn-primary btn-block" data-action="export-data">Daten exportieren (Speicherort wählen)</button>
+      <div id="export-fallback" style="display:none;margin-top:12px;">
+        <p style="font-size:0.83rem;color:var(--gray-500);margin-bottom:8px;">Falls der Download nicht startet: Markiere den Text unten, kopiere ihn und speichere ihn als .json-Datei.</p>
+        <textarea id="export-textarea" readonly style="width:100%;height:120px;font-size:0.75rem;font-family:monospace;padding:8px;border:1px solid var(--gray-300);border-radius:8px;background:var(--gray-50);"></textarea>
+        <button class="btn btn-outline btn-block btn-sm" style="margin-top:6px;" data-action="copy-export-data">In Zwischenablage kopieren</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Daten importieren</div>
+      <p style="font-size:0.85rem;color:var(--gray-500);margin-bottom:12px;">
+        Lade eine zuvor exportierte JSON-Datei (ältere Legacy-Exporte werden automatisch migriert).
+      </p>
+      <input type="file" id="import-file" accept=".json" style="margin-bottom:10px;font-size:0.85rem;">
+    </div>
+
+    <div class="card">
+      <div class="card-title">Einstellungen</div>
+      <div class="form-group">
+        <label>Supervisionsverhältnis (1 Supervision pro X Behandlungsstunden)</label>
+        <input type="number" id="setting-ratio" value="4" min="1" max="20">
+      </div>
+      <div class="form-group">
+        <label>Standard-Kontingent (VT Langzeit)</label>
+        <input type="number" id="setting-kontingent" value="60" min="1">
+      </div>
+    </div>
+
+    <div class="card" style="border: 1px solid var(--danger-light);">
+      <div class="card-title" style="color:var(--danger);">Alle Daten löschen</div>
+      <p style="font-size:0.85rem;color:var(--gray-500);margin-bottom:12px;">
+        Achtung: Dies löscht alle Patienten, Sitzungen und Supervisionsdaten unwiderruflich.
+      </p>
+      <button class="btn btn-danger btn-block" data-action="clear-all-data">Alle Daten löschen</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- FAB Button -->
+<button class="fab" id="fab-btn">+</button>
+
+<!-- ADD PATIENT MODAL -->
+<div class="modal-overlay" id="modal-patient">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-patient-title">Neuer Patient</h2>
+      <button class="modal-close" data-close="modal-patient">×</button>
+    </div>
+    <div>
+      <input type="hidden" id="patient-edit-id">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name *</label>
+          <input type="text" id="patient-name" placeholder="z.B. Max Mustermann">
+        </div>
+        <div class="form-group">
+          <label>Kürzel</label>
+          <input type="text" id="patient-kuerzel" placeholder="z.B. MM" maxlength="10">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Kontingent (Stunden)</label>
+          <input type="number" id="patient-kontingent" value="60" min="0">
+        </div>
+        <div class="form-group">
+          <label>Therapiebeginn</label>
+          <input type="date" id="patient-start">
+        </div>
+      </div>
+      <div id="patient-error" style="display:none;color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-patient">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD SESSION MODAL -->
+<div class="modal-overlay" id="modal-session">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Neue Sitzung</h2>
+      <button class="modal-close" data-close="modal-session">×</button>
+    </div>
+    <div>
+      <input type="hidden" id="session-patient-id">
+      <div class="form-group">
+        <label>Patient</label>
+        <select id="session-patient-select"></select>
+      </div>
+      <div class="form-group">
+        <label>Datum *</label>
+        <input type="date" id="session-date">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Art der Sitzung</label>
+          <select id="session-type">
+            <option value="einzel">Einzeltherapie (50 Min.)</option>
+            <option value="doppel">Doppelsitzung (100 Min.)</option>
+            <option value="gruppe">Gruppentherapie</option>
+            <option value="probatorik">Probatorische Sitzung</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Dauer (Minuten)</label>
+          <input type="number" id="session-duration" value="50" min="1">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notiz</label>
+        <input type="text" id="session-note" placeholder="Optionale Notiz...">
+      </div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-session">Sitzung speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD SUPERVISION MODAL -->
+<div class="modal-overlay" id="modal-supervision">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Neue Supervisionsstunde</h2>
+      <button class="modal-close" data-close="modal-supervision">×</button>
+    </div>
+    <div>
+      <div class="form-group" id="supervision-group-selector-container">
+        <label>Supervisionsgruppe</label>
+        <select id="supervision-group-select">
+          <option value="">— Manuell auswählen —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Zugehörige Patienten</label>
+        <div id="supervision-patient-checkboxes" style="max-height:180px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:8px;padding:8px;"></div>
+      </div>
+      <div class="form-group">
+        <label>Datum *</label>
+        <input type="date" id="supervision-date">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Art</label>
+          <select id="supervision-type">
+            <option value="einzel">Einzelsupervision</option>
+            <option value="gruppe">Gruppensupervision</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Dauer (Minuten)</label>
+          <input type="number" id="supervision-duration" value="50" min="1">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Supervisor</label>
+        <input type="text" id="supervision-supervisor" placeholder="Name des Supervisors">
+      </div>
+      <div class="form-group">
+        <label>Notiz</label>
+        <input type="text" id="supervision-note" placeholder="Optionale Notiz...">
+      </div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-supervision">Supervision speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD GROUP MODAL -->
+<div class="modal-overlay" id="modal-group">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-group-title">Neue Supervisionsgruppe</h2>
+      <button class="modal-close" data-close="modal-group">×</button>
+    </div>
+    <div>
+      <input type="hidden" id="group-edit-id">
+      <div class="form-group">
+        <label>Gruppenname *</label>
+        <input type="text" id="group-name" placeholder="z.B. Dienstags-Supervision, Gruppe Dr. Müller">
+      </div>
+      <div class="form-group">
+        <label>Supervisor</label>
+        <input type="text" id="group-supervisor" placeholder="Name des Supervisors">
+      </div>
+      <div class="form-group">
+        <label>Patienten in dieser Gruppe</label>
+        <div id="group-patient-checkboxes" style="max-height:200px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:8px;padding:8px;"></div>
+      </div>
+      <div id="group-error" style="display:none;color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-group">Gruppe speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM DIALOG -->
+<div class="modal-overlay" id="modal-confirm">
+  <div class="modal" style="padding-bottom:24px;max-width:400px;">
+    <div class="modal-header">
+      <h2>Bestätigung</h2>
+      <button class="modal-close" data-close="modal-confirm">×</button>
+    </div>
+    <p id="confirm-message" style="font-size:0.9rem;margin-bottom:16px;color:var(--gray-700);"></p>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-outline" style="flex:1;" data-close="modal-confirm">Abbrechen</button>
+      <button class="btn btn-danger" style="flex:1;" id="confirm-ok-btn">Bestätigen</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- ADD CHOICE MODAL -->
+<div class="modal-overlay" id="modal-add-choice">
+  <div class="modal" style="padding-bottom:30px;">
+    <div class="modal-header">
+      <h2>Hinzufügen</h2>
+      <button class="modal-close" data-close="modal-add-choice">×</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button class="btn btn-primary btn-block" data-action="open-patient-modal">
+        Neuer Patient
+      </button>
+      <button class="btn btn-outline btn-block" data-action="open-session-modal">
+        Neue Behandlungssitzung
+      </button>
+      <button class="btn btn-outline btn-block" data-action="open-supervision-modal">
+        Neue Supervisionsstunde
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- DSGVO MODAL (first-run, non-dismissable via backdrop) -->
+<div class="modal-overlay" id="modal-dsgvo">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header">
+      <h2>Datenschutz-Hinweis</h2>
+    </div>
+    <div style="font-size:0.88rem;line-height:1.5;color:var(--gray-700);">
+      <p style="margin-bottom:10px;"><strong>Was wird gespeichert:</strong> Namen, Kürzel, Sitzungs- und Supervisionsdaten Deiner Patient:innen.</p>
+      <p style="margin-bottom:10px;"><strong>Wo:</strong> lokal auf diesem Gerät (IndexedDB) und im persönlichen Google-Drive im unsichtbaren App-Bereich (<code>drive.appdata</code>-Scope).</p>
+      <p style="margin-bottom:10px;"><strong>Wer hat Zugriff:</strong> nur Du. Die App überträgt keine Daten an Dritte außer an Google Drive.</p>
+      <p style="margin-bottom:16px;"><strong>Rechtsgrundlage:</strong> Dokumentationspflicht der PP-Ausbildung nach PsychThG, berechtigtes Interesse.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary" style="flex:1;" data-action="dsgvo-accept">Verstanden und einverstanden</button>
+        <button class="btn btn-outline" style="flex:1;" data-action="dsgvo-leave">App verlassen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- VERSION CONFLICT MODAL -->
+<div class="modal-overlay" id="modal-version-conflict">
+  <div class="modal" style="max-width:480px;">
+    <div class="modal-header">
+      <h2>Neuere Daten erkannt</h2>
+    </div>
+    <p style="font-size:0.9rem;margin-bottom:16px;color:var(--gray-700);">
+      Die geladenen Daten wurden von einer neueren App-Version erstellt. Bitte aktualisiere die App
+      (Tab schließen und neu öffnen). Falls das Problem bleibt: JSON-Export über die neue Version
+      erstellen und mit dem Admin kontaktieren.
+    </p>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-primary" style="flex:1;" data-action="force-reload">App neu laden</button>
+    </div>
+  </div>
+</div>
+
+<!-- DIAGNOSE PANEL (§5.7) -->
+<div id="diagnose-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <strong>Self-Service Diagnose</strong>
+    <button class="btn btn-outline btn-sm" data-action="close-diagnose">×</button>
+  </div>
+  <div id="diagnose-content"></div>
+  <button class="btn btn-primary btn-sm btn-block" style="margin-top:8px;" data-action="copy-diagnose">Diagnose-JSON kopieren</button>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
