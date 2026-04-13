@@ -1,5 +1,5 @@
 {
-  "name": "Patientenstunden-Tracker",
+  "name": "NemPSTi",
   "short_name": "NemPSTi",
   "description": "Dokumentation von Behandlungs- und Supervisionsstunden für PP-Ausbildung (PsychThG).",
   "start_url": "./",
