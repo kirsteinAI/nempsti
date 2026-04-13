@@ -7,7 +7,7 @@
 // - Tab-Renderer lesen appData über getAppData() aus state.js.
 // - Keine direkte State-Mutation; alle Änderungen laufen über updateAppData().
 
-import { escapeHtml } from './validation.js';
+import { escapeHtml, getPhaseStats, createDefaultBewilligt } from './validation.js';
 import { getAppData } from './state.js';
 import { getDriveStatus, DriveStatus } from './drive.js';
 import { calculateForecast, ABSCHLUSSKONTROLLEN } from './forecast.js';
@@ -48,7 +48,9 @@ function getPatientSupervisions(patientId) {
 }
 
 export function countSessionHours(patientId) {
-  return getPatientSessions(patientId).reduce((sum, s) => sum + (s.duration / 50), 0);
+  return getPatientSessions(patientId)
+    .filter(s => s.phase !== 'probatorik')
+    .reduce((sum, s) => sum + (s.duration / 50), 0);
 }
 
 export function countSupervisionHours(patientId) {
@@ -80,9 +82,25 @@ function formatDate(dateStr) {
 export function renderDashboard() {
   const data = getAppData();
   const totalPatients = data.patients.length;
-  const totalSessions = data.sessions.length;
-  const totalSessionHours = data.sessions.reduce((sum, s) => sum + (s.duration / 50), 0);
+  // Behandlungsstunden: nur Nicht-Probatorik-Sitzungen
+  const totalSessionHours = data.sessions
+    .filter(s => s.phase !== 'probatorik')
+    .reduce((sum, s) => sum + (s.duration / 50), 0);
   const totalSupervisionHours = data.supervisions.reduce((sum, s) => sum + (s.duration / 50), 0);
+
+  // Verhältnis Behandlung : Supervision
+  let ratioText = '– : –';
+  let ratioColor = 'var(--gray-500)';
+  if (totalSessionHours > 0 && totalSupervisionHours > 0) {
+    const ratio = totalSessionHours / totalSupervisionHours;
+    ratioText = ratio.toFixed(1) + ' : 1';
+    if (ratio <= 4.0) ratioColor = 'var(--success)';
+    else if (ratio <= 5.0) ratioColor = 'var(--warning)';
+    else ratioColor = 'var(--danger)';
+  } else if (totalSessionHours > 0) {
+    ratioText = '∞ : 1';
+    ratioColor = 'var(--danger)';
+  }
 
   document.getElementById('stats-grid').innerHTML = `
     <div class="stat-card">
@@ -90,8 +108,8 @@ export function renderDashboard() {
       <div class="stat-label">Patienten</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value">${totalSessions}</div>
-      <div class="stat-label">Sitzungen</div>
+      <div class="stat-value" style="color:${ratioColor};font-size:1.1rem;">${ratioText}</div>
+      <div class="stat-label">Behandlung : SV</div>
     </div>
     <div class="stat-card">
       <div class="stat-value">${totalSessionHours.toFixed(1)}</div>
@@ -134,7 +152,28 @@ export function renderDashboard() {
   } else {
     data.patients.forEach(p => {
       const status = getSupervisionStatus(p.id);
-      const kontingent = p.kontingent || data.settings.defaultKontingent;
+      const bew = p.bewilligt || createDefaultBewilligt();
+      // Gesamtkontingent aus bewilligt ableiten
+      let kontingent = 12;
+      if (bew.kzt2) kontingent = 24;
+      if (bew.lzt) kontingent = bew.lztMax || 60;
+      if (bew.lztV) kontingent = bew.lztVMax || 80;
+
+      // Aktuelle Phase bestimmen
+      const stats = getPhaseStats(p.id, data);
+      let phaseLabel = '';
+      if (stats) {
+        const nonProbaCount = data.sessions.filter(s => s.patientId === p.id && s.phase !== 'probatorik').length;
+        if (nonProbaCount === 0) {
+          const probaCount = stats.probatorik ? stats.probatorik.count : 0;
+          phaseLabel = probaCount > 0 ? 'Probatorik' : '';
+        } else if (stats.lzt_v && stats.lzt_v.count > 0) { phaseLabel = 'LZT-V'; }
+        else if (stats.lzt && stats.lzt.count > 0 && stats.lzt.count < stats.lzt.max) { phaseLabel = 'LZT'; }
+        else if (stats.lzt && stats.lzt.count >= stats.lzt.max) { phaseLabel = 'LZT-V'; }
+        else if (stats.kzt2 && stats.kzt2.count > 0) { phaseLabel = 'KZT 2'; }
+        else { phaseLabel = 'KZT 1'; }
+      }
+
       let badgeClass = 'badge-ok';
       let badgeText = 'OK';
       if (status.deficit > 0.5) { badgeClass = 'badge-danger'; badgeText = `−${status.deficit.toFixed(1)} SV`; }
@@ -145,7 +184,7 @@ export function renderDashboard() {
           <div class="patient-info">
             <h3>${escapeHtml(p.name)}${p.kuerzel ? ' <span style="color:var(--gray-500);font-weight:400;">(' + escapeHtml(p.kuerzel) + ')</span>' : ''}</h3>
             <div class="patient-meta">
-              ${status.sessionHours.toFixed(1)}/${kontingent}h${p.startDate ? ' · ab ' + formatDate(p.startDate) : ''}
+              ${status.sessionHours.toFixed(1)}/${kontingent}h${phaseLabel ? ' · ' + phaseLabel : ''}${p.startDate ? ' · ab ' + formatDate(p.startDate) : ''}
             </div>
           </div>
           <span class="patient-badge ${badgeClass}">${badgeText}</span>
@@ -166,6 +205,12 @@ export function renderPatientList() {
   } else {
     data.patients.forEach(p => {
       const status = getSupervisionStatus(p.id);
+      const bew = p.bewilligt || createDefaultBewilligt();
+      let kontingent = 12;
+      if (bew.kzt2) kontingent = 24;
+      if (bew.lzt) kontingent = bew.lztMax || 60;
+      if (bew.lztV) kontingent = bew.lztVMax || 80;
+
       let badgeClass = 'badge-ok', badgeText = 'SV OK';
       if (status.deficit > 0.5) { badgeClass = 'badge-danger'; badgeText = `−${status.deficit.toFixed(1)} SV`; }
       else if (status.deficit > 0) { badgeClass = 'badge-warn'; badgeText = `−${status.deficit.toFixed(1)} SV`; }
@@ -175,7 +220,7 @@ export function renderPatientList() {
           <div class="patient-info">
             <h3>${escapeHtml(p.name)}${p.kuerzel ? ' <span style="color:var(--gray-500);font-weight:400;">(' + escapeHtml(p.kuerzel) + ')</span>' : ''}</h3>
             <div class="patient-meta">
-              ${status.sessionHours.toFixed(1)} / ${(p.kontingent || data.settings.defaultKontingent)} Std.${p.startDate ? ' · ab ' + formatDate(p.startDate) : ''}
+              ${status.sessionHours.toFixed(1)} / ${kontingent} Std.${p.startDate ? ' · ab ' + formatDate(p.startDate) : ''}
             </div>
           </div>
           <span class="patient-badge ${badgeClass}">${badgeText}</span>
@@ -204,13 +249,70 @@ export function showPatientDetail(patientId) {
   const status = getSupervisionStatus(patientId);
   const sessions = getPatientSessions(patientId);
   const supervisions = getPatientSupervisions(patientId);
-  const kontingent = p.kontingent || data.settings.defaultKontingent;
-  const kontingentPct = kontingent > 0 ? Math.min(100, (status.sessionHours / kontingent) * 100) : 0;
+  const bew = p.bewilligt || createDefaultBewilligt();
+
+  // Gesamtkontingent aus bewilligt
+  let kontingent = 12;
+  if (bew.kzt2) kontingent = 24;
+  if (bew.lzt) kontingent = bew.lztMax || 60;
+  if (bew.lztV) kontingent = bew.lztVMax || 80;
+
+  const nonProbaCount = data.sessions.filter(s => s.patientId === patientId && s.phase !== 'probatorik').length;
+  const kontingentPct = kontingent > 0 ? Math.min(100, (nonProbaCount / kontingent) * 100) : 0;
   const svPct = status.required > 0 ? Math.min(100, (status.supervisionHours / status.required) * 100) : 100;
 
   let svBarColor = 'var(--success)';
   if (svPct < 70) svBarColor = 'var(--danger)';
   else if (svPct < 100) svBarColor = 'var(--warning)';
+
+  // Phase-Stats für Fortschrittsbalken
+  const stats = getPhaseStats(patientId, data);
+  const phaseLabels = {
+    probatorik: 'Probatorik',
+    kzt1: 'KZT 1',
+    kzt2: 'KZT 2',
+    lzt: 'LZT',
+    lzt_v: 'LZT-Verlängerung',
+  };
+  const phaseOrder = ['probatorik', 'kzt1', 'kzt2', 'lzt', 'lzt_v'];
+
+  let phaseBarsHtml = '';
+  if (stats) {
+    for (const key of phaseOrder) {
+      const s = stats[key];
+      if (!s) {
+        // Phase nicht bewilligt — nur anzeigen wenn sie in der Sequenz vor einer bewilligten liegt
+        if (key === 'kzt2' && !bew.kzt2) {
+          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
+        } else if (key === 'lzt' && !bew.lzt) {
+          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
+        } else if (key === 'lzt_v' && !bew.lztV) {
+          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
+        }
+        continue;
+      }
+      const pct = s.max > 0 ? Math.min(100, (s.count / s.max) * 100) : 0;
+      const done = s.count >= s.max;
+      const color = done ? 'var(--success)' : 'var(--primary)';
+      phaseBarsHtml += `
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.82rem;">
+            <span>${phaseLabels[key]}</span>
+            <span>${s.count} / ${s.max}${done ? ' ✓' : ''}</span>
+          </div>
+          <div class="supervision-ratio-bar">
+            <div class="supervision-ratio-fill" style="width:${pct}%;background:${color}"></div>
+          </div>
+        </div>`;
+    }
+  }
+
+  // Session-Typ + Phase Label Mapping
+  function sessionLabel(s) {
+    const typeLabel = s.type === 'einzel' ? 'Einzelsitzung' : s.type === 'doppel' ? 'Doppelsitzung' : 'Probatorik';
+    const phLabel = s.phase ? phaseLabels[s.phase] || s.phase : '';
+    return `${typeLabel}${phLabel && s.phase !== 'probatorik' ? ' · ' + phLabel : ''} · ${s.duration} Min.`;
+  }
 
   const html = `
     <div class="card">
@@ -242,14 +344,19 @@ export function showPatientDetail(patientId) {
     </div>
 
     <div class="card">
-      <div class="card-title">Kontingent</div>
+      <div class="card-title">Kontingent (${nonProbaCount} / ${kontingent} Sitzungen)</div>
       <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:4px;">
-        <span>${status.sessionHours.toFixed(1)} von ${kontingent} Stunden</span>
+        <span>${nonProbaCount} von ${kontingent} Sitzungen</span>
         <span>${kontingentPct.toFixed(0)}%</span>
       </div>
       <div class="supervision-ratio-bar">
         <div class="supervision-ratio-fill" style="width:${kontingentPct}%;background:${kontingentPct > 90 ? 'var(--warning)' : 'var(--primary)'}"></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Therapiephasen</div>
+      ${phaseBarsHtml}
     </div>
 
     <div class="card">
@@ -277,7 +384,7 @@ export function showPatientDetail(patientId) {
         <div class="session-item">
           <div>
             <span class="session-date">${formatDate(s.date)}</span>
-            <span class="session-type"> · ${s.type === 'einzel' ? 'Einzelsitzung' : s.type === 'doppel' ? 'Doppelsitzung' : s.type === 'gruppe' ? 'Gruppe' : 'Probatorik'} · ${s.duration} Min.</span>
+            <span class="session-type"> · ${sessionLabel(s)}</span>
             ${s.note ? `<div style="font-size:0.78rem;color:var(--gray-500);">${escapeHtml(s.note)}</div>` : ''}
           </div>
           <button class="btn btn-outline btn-sm" data-action="delete-session" data-id="${s.id}" data-patient-id="${p.id}">×</button>
@@ -318,7 +425,7 @@ export function renderSupervisionOverview() {
       <p>Noch keine Patienten angelegt.</p>
     </div>`;
   } else {
-    const totalSessionH = data.sessions.reduce((s, x) => s + x.duration / 50, 0);
+    const totalSessionH = data.sessions.filter(x => x.phase !== 'probatorik').reduce((s, x) => s + x.duration / 50, 0);
     const totalSvH = data.supervisions.reduce((s, x) => s + x.duration / 50, 0);
     const totalRequired = totalSessionH / ratio;
     const overallPct = totalRequired > 0 ? Math.min(100, (totalSvH / totalRequired) * 100) : 100;

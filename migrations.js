@@ -4,7 +4,7 @@
 // Regel: Einmal released, darf eine Migration nie editiert oder umsortiert
 // werden. Neue Versionen werden ans Ende angehängt.
 
-export const CURRENT_VERSION = 3;
+export const CURRENT_VERSION = 4;
 
 /**
  * MIGRATIONS[i] = { from: n, to: n+1, up: (data) => data }
@@ -114,6 +114,110 @@ export const MIGRATIONS = [
           },
         },
         forecastIntakes: Array.isArray(data.forecastIntakes) ? data.forecastIntakes.slice() : [],
+      };
+    },
+  },
+  {
+    from: 3,
+    to: 4,
+    up(data) {
+      // v4: Therapiephasen-Tracking & Bewilligungs-Struktur.
+      //
+      // Sessions:
+      //   - type 'probatorik' → type 'einzel', phase 'probatorik'
+      //   - type 'gruppe' → type 'einzel' (Sicherheitsnetz)
+      //   - Alle Nicht-Probatorik-Sessions bekommen `phase` berechnet anhand
+      //     der chronologischen Reihenfolge pro Patient.
+      //
+      // Patients:
+      //   - kontingent (Zahl) → bewilligt-Objekt.
+      //     kontingent bleibt als Legacy-Feld erhalten.
+      //
+      // SESSION_TYPES ist jetzt ['einzel', 'doppel', 'probatorik'].
+
+      const sessions = Array.isArray(data.sessions) ? data.sessions.slice() : [];
+      const patients = Array.isArray(data.patients) ? data.patients.slice() : [];
+
+      // Phase 1: Session-Typen normalisieren
+      const migratedSessions = sessions.map(s => {
+        const next = { ...s };
+        if (s.type === 'probatorik') {
+          next.type = 'einzel';
+          next.phase = 'probatorik';
+        } else if (s.type === 'gruppe') {
+          next.type = 'einzel';
+          // gruppe-Sessions werden als reguläre Kontingent-Sitzungen gezählt
+          // → Phase wird unten berechnet.
+        }
+        return next;
+      });
+
+      // Phase 2: Nicht-Probatorik-Sessions pro Patient chronologisch
+      // durchnummerieren und Phase zuweisen.
+      const patientNonProba = {};
+      // Sortieren: aufsteigend nach Datum, dann nach Array-Index (stabil)
+      const sortedForPhase = migratedSessions
+        .map((s, idx) => ({ s, idx }))
+        .filter(({ s }) => s.phase !== 'probatorik')
+        .sort((a, b) => a.s.date.localeCompare(b.s.date) || a.idx - b.idx);
+
+      for (const { s } of sortedForPhase) {
+        if (!patientNonProba[s.patientId]) patientNonProba[s.patientId] = 0;
+        patientNonProba[s.patientId]++;
+        const n = patientNonProba[s.patientId];
+
+        // Patienten-Kontingent bestimmt die Grenzen für die Migration.
+        // Da wir die bewilligt-Struktur noch nicht haben, leiten wir aus
+        // dem bisherigen kontingent-Feld ab.
+        const patient = patients.find(p => p.id === s.patientId);
+        const kontingent = (patient && typeof patient.kontingent === 'number') ? patient.kontingent : 60;
+
+        // Für die Migration: Phase basierend auf Position zuweisen.
+        // Bis 12 → kzt1, 13–24 → kzt2, 25–kontingent → lzt,
+        // kontingent+1–80 → lzt_v
+        if (n <= 12) {
+          s.phase = 'kzt1';
+        } else if (n <= 24) {
+          s.phase = 'kzt2';
+        } else if (n <= kontingent) {
+          s.phase = 'lzt';
+        } else {
+          s.phase = 'lzt_v';
+        }
+      }
+
+      // Probatorik-Sessions ohne phase-Feld (edge case: wurde oben schon gesetzt)
+      for (const s of migratedSessions) {
+        if (!s.phase) s.phase = 'kzt1'; // Fallback für unerwartete Fälle
+      }
+
+      // Phase 3: Patienten-bewilligt-Objekt aus kontingent ableiten.
+      const migratedPatients = patients.map(p => {
+        const next = { ...p };
+        const k = (typeof p.kontingent === 'number' && Number.isFinite(p.kontingent)) ? p.kontingent : 60;
+
+        // Bewilligungs-Ableitung aus bisherigem kontingent:
+        // Logik: Zähle wie viele Nicht-Probatorik-Sessions der Patient hat,
+        // um zu sehen welche Phasen er faktisch schon betreten hat.
+        const actualCount = patientNonProba[p.id] || 0;
+
+        const bewilligt = {
+          kzt1: true, // immer
+          kzt2: k > 12 || actualCount > 12,
+          lzt: k > 24 || actualCount > 24,
+          lztMax: k > 24 ? Math.max(k, 60) : 60,
+          lztV: k > 60 || actualCount > 60,
+          lztVMax: k > 60 ? Math.max(k, 80) : 80,
+        };
+
+        next.bewilligt = bewilligt;
+        return next;
+      });
+
+      return {
+        ...data,
+        sessions: migratedSessions,
+        patients: migratedPatients,
       };
     },
   },

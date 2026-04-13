@@ -6,7 +6,8 @@ export const FORMAT = Object.freeze({
   ID_PATTERN: /^[a-z0-9]{6,24}$/,
   DATE_PATTERN: /^\d{4}-\d{2}-\d{2}$/,
   MAX_STRING_LENGTH: 500,
-  SESSION_TYPES: Object.freeze(['einzel', 'doppel', 'gruppe', 'probatorik']),
+  SESSION_TYPES: Object.freeze(['einzel', 'doppel', 'probatorik']),
+  SESSION_PHASES: Object.freeze(['probatorik', 'kzt1', 'kzt2', 'lzt', 'lzt_v']),
   SUPERVISION_TYPES: Object.freeze(['einzel', 'gruppe']),
 });
 
@@ -205,6 +206,19 @@ export function validateAppData(obj) {
       if (p.startDate !== undefined && p.startDate !== null && p.startDate !== '' && !isDateString(p.startDate)) {
         return fail(`${path}.startDate`, 'must match YYYY-MM-DD');
       }
+      // bewilligt: required for v4+ payloads, optional for v3 (migration adds it)
+      if (p.bewilligt !== undefined) {
+        if (!isPlainObject(p.bewilligt)) return fail(`${path}.bewilligt`, 'must be an object');
+        const b = p.bewilligt;
+        if (typeof b.kzt1 !== 'boolean') return fail(`${path}.bewilligt.kzt1`, 'must be a boolean');
+        if (typeof b.kzt2 !== 'boolean') return fail(`${path}.bewilligt.kzt2`, 'must be a boolean');
+        if (typeof b.lzt !== 'boolean') return fail(`${path}.bewilligt.lzt`, 'must be a boolean');
+        if (!isPositiveNumber(b.lztMax) && b.lztMax !== 0) return fail(`${path}.bewilligt.lztMax`, 'must be a non-negative number');
+        if (typeof b.lztV !== 'boolean') return fail(`${path}.bewilligt.lztV`, 'must be a boolean');
+        if (!isPositiveNumber(b.lztVMax) && b.lztVMax !== 0) return fail(`${path}.bewilligt.lztVMax`, 'must be a non-negative number');
+      } else if (isVersioned && obj.version >= 4) {
+        return fail(`${path}.bewilligt`, 'required for v4 payloads');
+      }
     }
   }
 
@@ -220,6 +234,14 @@ export function validateAppData(obj) {
       if (!isDateString(s.date)) return fail(`${path}.date`, 'must match YYYY-MM-DD');
       if (!FORMAT.SESSION_TYPES.includes(s.type)) {
         return fail(`${path}.type`, `invalid enum value — expected one of ${FORMAT.SESSION_TYPES.join('|')}`);
+      }
+      // phase: required for v4+ payloads, optional for v3 (migration adds it)
+      if (s.phase !== undefined) {
+        if (!FORMAT.SESSION_PHASES.includes(s.phase)) {
+          return fail(`${path}.phase`, `invalid enum value — expected one of ${FORMAT.SESSION_PHASES.join('|')}`);
+        }
+      } else if (isVersioned && obj.version >= 4) {
+        return fail(`${path}.phase`, 'required for v4 payloads');
       }
       if (!isPositiveNumber(s.duration)) return fail(`${path}.duration`, 'must be a positive number');
       if (s.note !== undefined && s.note !== null && !isString(s.note)) {
@@ -307,6 +329,9 @@ export function validateSessionRecord(s) {
   if (!FORMAT.SESSION_TYPES.includes(s.type)) {
     return { ok: false, error: `type: must be one of ${FORMAT.SESSION_TYPES.join('|')}` };
   }
+  if (!FORMAT.SESSION_PHASES.includes(s.phase)) {
+    return { ok: false, error: `phase: must be one of ${FORMAT.SESSION_PHASES.join('|')}` };
+  }
   if (!isPositiveNumber(s.duration)) {
     return { ok: false, error: 'duration: must be a positive number in minutes' };
   }
@@ -364,10 +389,167 @@ export function validateForecastIntakeRecord(it) {
   return { ok: true };
 }
 
+/**
+ * Erzeugt das Default-bewilligt-Objekt für neue Patienten.
+ * KZT 1 ist immer bewilligt (Grundversorgung).
+ */
+export function createDefaultBewilligt() {
+  return {
+    kzt1: true,
+    kzt2: false,
+    lzt: false,
+    lztMax: 60,
+    lztV: false,
+    lztVMax: 80,
+  };
+}
+
+/**
+ * Berechnet die automatische Phase für eine neue Nicht-Probatorik-Sitzung.
+ *
+ * Logik: Zählt alle bisherigen Nicht-Probatorik-Sitzungen des Patienten (= n).
+ * Die neue Sitzung wird Sitzung n+1. Phase ergibt sich aus der Sitzungsnummer
+ * und den bewilligten Phasen des Patienten.
+ *
+ * @param {string} patientId
+ * @param {object} data — appData
+ * @returns {{ phase: string, number: number, max: number, label: string } | { error: string }}
+ */
+export function computeSessionPhase(patientId, data) {
+  const patient = data.patients.find(p => p.id === patientId);
+  if (!patient) return { error: 'Patient nicht gefunden' };
+
+  const bew = patient.bewilligt || createDefaultBewilligt();
+  const nonProba = data.sessions
+    .filter(s => s.patientId === patientId && s.phase !== 'probatorik')
+    .length;
+  const nextNum = nonProba + 1; // 1-basierte Sitzungsnummer
+
+  // Phasengrenzen berechnen basierend auf bewilligten Phasen
+  let boundary = 0;
+
+  // KZT-Pfad: KZT1 immer bewilligt
+  if (bew.kzt1 && !bew.lzt) {
+    // Normaler KZT-Pfad (kein direktes LZT)
+    const kzt1End = 12;
+    if (nextNum <= kzt1End) {
+      return { phase: 'kzt1', number: nextNum, max: kzt1End, label: 'KZT 1' };
+    }
+    boundary = kzt1End;
+
+    if (bew.kzt2) {
+      const kzt2End = boundary + 12; // 24
+      if (nextNum <= kzt2End) {
+        return { phase: 'kzt2', number: nextNum - boundary, max: 12, label: 'KZT 2' };
+      }
+      boundary = kzt2End;
+    }
+    // KZT-only: kein LZT bewilligt → Limit erreicht
+    return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary} bewilligt)` };
+  }
+
+  if (bew.lzt) {
+    if (bew.kzt1 && (bew.kzt2 || !bew.kzt2)) {
+      // KZT1 vorhanden — normaler Pfad mit LZT danach
+      const kzt1End = 12;
+      if (nextNum <= kzt1End) {
+        return { phase: 'kzt1', number: nextNum, max: kzt1End, label: 'KZT 1' };
+      }
+      boundary = kzt1End;
+
+      if (bew.kzt2) {
+        const kzt2End = boundary + 12; // 24
+        if (nextNum <= kzt2End) {
+          return { phase: 'kzt2', number: nextNum - boundary, max: 12, label: 'KZT 2' };
+        }
+        boundary = kzt2End;
+      }
+
+      // LZT: max ist lztMax total (inkl. KZT)
+      const lztMax = bew.lztMax || 60;
+      if (nextNum <= lztMax) {
+        return { phase: 'lzt', number: nextNum, max: lztMax, label: 'LZT' };
+      }
+      boundary = lztMax;
+
+      if (bew.lztV) {
+        const lztVMax = bew.lztVMax || 80;
+        if (nextNum <= lztVMax) {
+          return { phase: 'lzt_v', number: nextNum, max: lztVMax, label: 'LZT-Verlängerung' };
+        }
+        boundary = lztVMax;
+      }
+
+      return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary} bewilligt)` };
+    }
+  }
+
+  // Fallback: nur KZT1 (Standard)
+  if (nextNum <= 12) {
+    return { phase: 'kzt1', number: nextNum, max: 12, label: 'KZT 1' };
+  }
+  return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. 12 bewilligt)` };
+}
+
+/**
+ * Berechnet die Phase-Statistiken für einen Patienten.
+ * Gibt pro Phase die aktuelle Anzahl und das Maximum zurück.
+ */
+export function getPhaseStats(patientId, data) {
+  const patient = data.patients.find(p => p.id === patientId);
+  if (!patient) return null;
+
+  const bew = patient.bewilligt || createDefaultBewilligt();
+  const sessions = data.sessions.filter(s => s.patientId === patientId);
+  const probaCount = sessions.filter(s => s.phase === 'probatorik').length;
+  const nonProba = sessions.filter(s => s.phase !== 'probatorik').length;
+
+  const hasKzt = bew.kzt1 && !bew.lzt;
+  const hasLzt = bew.lzt;
+
+  const stats = {
+    probatorik: { count: probaCount, max: 8 },
+  };
+
+  if (hasLzt && !bew.kzt1) {
+    // Direkter LZT-Pfad (ohne KZT) — theoretisch nicht vorgesehen, aber defensiv
+    stats.lzt = { count: Math.min(nonProba, bew.lztMax || 60), max: bew.lztMax || 60 };
+    if (bew.lztV) {
+      stats.lzt_v = { count: Math.max(0, nonProba - (bew.lztMax || 60)), max: (bew.lztVMax || 80) - (bew.lztMax || 60) };
+    }
+    return stats;
+  }
+
+  // Normaler Pfad: KZT1 → (KZT2) → (LZT) → (LZT-V)
+  let remaining = nonProba;
+
+  stats.kzt1 = { count: Math.min(remaining, 12), max: 12 };
+  remaining = Math.max(0, remaining - 12);
+
+  if (bew.kzt2) {
+    stats.kzt2 = { count: Math.min(remaining, 12), max: 12 };
+    remaining = Math.max(0, remaining - 12);
+  }
+
+  if (bew.lzt) {
+    const kztTotal = 12 + (bew.kzt2 ? 12 : 0);
+    const lztSlots = (bew.lztMax || 60) - kztTotal;
+    stats.lzt = { count: Math.min(remaining, lztSlots), max: lztSlots };
+    remaining = Math.max(0, remaining - lztSlots);
+
+    if (bew.lztV) {
+      const lztVSlots = (bew.lztVMax || 80) - (bew.lztMax || 60);
+      stats.lzt_v = { count: Math.min(remaining, lztVSlots), max: lztVSlots };
+    }
+  }
+
+  return stats;
+}
+
 // Standard-Empty-State für frische Installationen.
 export function createEmptyAppData() {
   return {
-    version: 3,
+    version: 4,
     settings: {
       supervisionRatio: 4,
       defaultKontingent: 60,

@@ -212,14 +212,27 @@
           <input type="text" id="patient-kuerzel" placeholder="z.B. MM" maxlength="10">
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Kontingent (Stunden)</label>
-          <input type="number" id="patient-kontingent" value="60" min="0">
-        </div>
-        <div class="form-group">
-          <label>Therapiebeginn</label>
-          <input type="date" id="patient-start">
+      <div class="form-group">
+        <label>Therapiebeginn</label>
+        <input type="date" id="patient-start">
+      </div>
+      <div class="form-group">
+        <label>Bewilligte Phasen</label>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.88rem;color:var(--gray-500);cursor:default;">
+            <input type="checkbox" id="patient-bew-kzt1" checked disabled> KZT 1 (12 Sitzungen)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.88rem;">
+            <input type="checkbox" id="patient-bew-kzt2"> KZT 2 (12 Sitzungen)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.88rem;">
+            <input type="checkbox" id="patient-bew-lzt"> Langzeittherapie, max:
+            <input type="number" id="patient-bew-lzt-max" value="60" min="1" max="999" style="width:60px;"> Sitzungen
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.88rem;">
+            <input type="checkbox" id="patient-bew-lztv"> LZT-Verlängerung, max:
+            <input type="number" id="patient-bew-lztv-max" value="80" min="1" max="999" style="width:60px;"> Sitzungen
+          </label>
         </div>
       </div>
       <div id="patient-error" style="display:none;color:var(--danger);font-size:0.85rem;margin-bottom:10px;"></div>
@@ -251,8 +264,7 @@
           <select id="session-type">
             <option value="einzel">Einzeltherapie (50 Min.)</option>
             <option value="doppel">Doppelsitzung (100 Min.)</option>
-            <option value="gruppe">Gruppentherapie</option>
-            <option value="probatorik">Probatorische Sitzung</option>
+            <option value="probatorik">Probatorische Sitzung (50 Min.)</option>
           </select>
         </div>
         <div class="form-group">
@@ -260,6 +272,7 @@
           <input type="number" id="session-duration" value="50" min="1">
         </div>
       </div>
+      <div id="session-phase-info" style="display:none;padding:8px 12px;margin-bottom:12px;border-radius:8px;font-size:0.85rem;background:var(--gray-100);color:var(--gray-700);"></div>
       <div class="form-group">
         <label>Notiz</label>
         <input type="text" id="session-note" placeholder="Optionale Notiz...">

@@ -18,6 +18,8 @@ import {
   validateSupervisionRecord,
   validateForecastIntakeRecord,
   createEmptyAppData,
+  createDefaultBewilligt,
+  computeSessionPhase,
 } from './validation.js';
 import { ABSCHLUSSKONTROLLEN } from './forecast.js';
 import { runMigrations, CURRENT_VERSION } from './migrations.js';
@@ -424,15 +426,27 @@ function openPatientModal(editId) {
   if (!editId) {
     document.getElementById('patient-name').value = '';
     document.getElementById('patient-kuerzel').value = '';
-    document.getElementById('patient-kontingent').value = data.settings.defaultKontingent;
     document.getElementById('patient-start').value = '';
+    // Bewilligt-Defaults
+    const bew = createDefaultBewilligt();
+    document.getElementById('patient-bew-kzt2').checked = bew.kzt2;
+    document.getElementById('patient-bew-lzt').checked = bew.lzt;
+    document.getElementById('patient-bew-lzt-max').value = bew.lztMax;
+    document.getElementById('patient-bew-lztv').checked = bew.lztV;
+    document.getElementById('patient-bew-lztv-max').value = bew.lztVMax;
   } else {
     const p = data.patients.find(pt => pt.id === editId);
     if (p) {
       document.getElementById('patient-name').value = p.name;
       document.getElementById('patient-kuerzel').value = p.kuerzel || '';
-      document.getElementById('patient-kontingent').value = p.kontingent ?? data.settings.defaultKontingent;
       document.getElementById('patient-start').value = p.startDate || '';
+      // Bewilligt aus Patient-Daten laden
+      const bew = p.bewilligt || createDefaultBewilligt();
+      document.getElementById('patient-bew-kzt2').checked = bew.kzt2;
+      document.getElementById('patient-bew-lzt').checked = bew.lzt;
+      document.getElementById('patient-bew-lzt-max').value = bew.lztMax || 60;
+      document.getElementById('patient-bew-lztv').checked = bew.lztV;
+      document.getElementById('patient-bew-lztv-max').value = bew.lztVMax || 80;
     }
   }
   openModal('modal-patient');
@@ -450,15 +464,31 @@ function savePatientClick() {
     document.getElementById('patient-error').style.display = 'none';
 
     const editId = document.getElementById('patient-edit-id').value;
+    const lztMax = parseInt(document.getElementById('patient-bew-lzt-max').value, 10);
+    const lztVMax = parseInt(document.getElementById('patient-bew-lztv-max').value, 10);
+
+    const bewilligt = {
+      kzt1: true,
+      kzt2: document.getElementById('patient-bew-kzt2').checked,
+      lzt: document.getElementById('patient-bew-lzt').checked,
+      lztMax: Number.isFinite(lztMax) && lztMax > 0 ? lztMax : 60,
+      lztV: document.getElementById('patient-bew-lztv').checked,
+      lztVMax: Number.isFinite(lztVMax) && lztVMax > 0 ? lztVMax : 80,
+    };
+
+    // Gesamtkontingent für Abwärtskompatibilität berechnen
+    let kontingent = 12; // KZT1
+    if (bewilligt.kzt2) kontingent = 24;
+    if (bewilligt.lzt) kontingent = bewilligt.lztMax;
+    if (bewilligt.lztV) kontingent = bewilligt.lztVMax;
+
     const patientData = {
       name,
       kuerzel: document.getElementById('patient-kuerzel').value.trim(),
-      kontingent: parseInt(document.getElementById('patient-kontingent').value, 10),
+      kontingent,
+      bewilligt,
       startDate: document.getElementById('patient-start').value || '',
     };
-    if (!Number.isFinite(patientData.kontingent)) {
-      patientData.kontingent = state.getAppData().settings.defaultKontingent;
-    }
 
     state.updateAppData(data => {
       if (editId) {
@@ -509,13 +539,109 @@ function openSessionModal(patientId) {
   document.getElementById('session-type').value = 'einzel';
   document.getElementById('session-duration').value = 50;
   document.getElementById('session-note').value = '';
+
+  // Phase-Info aktualisieren bei Auswahländerungen
+  updateSessionPhaseInfo();
   openModal('modal-session');
+}
+
+/**
+ * Aktualisiert die Phase-Info-Anzeige im Session-Modal basierend auf
+ * dem aktuell ausgewählten Patienten und Sitzungstyp.
+ * Setzt auch die Dauer-Defaults passend zum Sitzungstyp.
+ */
+function updateSessionPhaseInfo() {
+  const infoEl = document.getElementById('session-phase-info');
+  if (!infoEl) return;
+
+  const patientId = document.getElementById('session-patient-select').value;
+  const sessionType = document.getElementById('session-type').value;
+  const durationEl = document.getElementById('session-duration');
+  const data = state.getAppData();
+
+  // Dauer-Default je nach Typ
+  if (sessionType === 'probatorik') durationEl.value = 50;
+  else if (sessionType === 'doppel') durationEl.value = 100;
+  else if (sessionType === 'einzel' && parseInt(durationEl.value, 10) === 100) durationEl.value = 50;
+
+  if (!patientId) {
+    infoEl.style.display = 'none';
+    return;
+  }
+
+  if (sessionType === 'probatorik') {
+    // Prüfen ob Probatorik noch möglich ist
+    const nonProba = data.sessions.filter(s => s.patientId === patientId && s.phase !== 'probatorik').length;
+    const probaCount = data.sessions.filter(s => s.patientId === patientId && s.phase === 'probatorik').length;
+
+    if (nonProba > 0) {
+      infoEl.style.display = 'block';
+      infoEl.style.background = 'var(--danger-light, #fde8e8)';
+      infoEl.style.color = 'var(--danger)';
+      infoEl.textContent = 'Probatorik nicht mehr möglich — es existieren bereits Kontingent-Sitzungen für diesen Patienten.';
+      return;
+    }
+    if (probaCount >= 8) {
+      infoEl.style.display = 'block';
+      infoEl.style.background = 'var(--danger-light, #fde8e8)';
+      infoEl.style.color = 'var(--danger)';
+      infoEl.textContent = `Probatorik-Maximum erreicht (${probaCount} von 8).`;
+      return;
+    }
+    infoEl.style.display = 'block';
+    infoEl.style.background = 'var(--gray-100)';
+    infoEl.style.color = 'var(--gray-700)';
+    infoEl.textContent = `→ Probatorik, Sitzung ${probaCount + 1} von 8`;
+    return;
+  }
+
+  // Einzeltherapie / Doppelsitzung → Phase automatisch berechnen
+  const result = computeSessionPhase(patientId, data);
+  infoEl.style.display = 'block';
+
+  if (result.error) {
+    infoEl.style.background = 'var(--danger-light, #fde8e8)';
+    infoEl.style.color = 'var(--danger)';
+    infoEl.textContent = result.error;
+  } else {
+    infoEl.style.background = 'var(--gray-100)';
+    infoEl.style.color = 'var(--gray-700)';
+    infoEl.textContent = `→ ${result.label}, Sitzung ${result.number} von ${result.max}`;
+  }
 }
 
 function saveSessionClick() {
   try {
     const patientId = document.getElementById('session-patient-select').value;
     if (!patientId) { showToast('Bitte zuerst einen Patienten anlegen.', 'warning'); return; }
+
+    const data = state.getAppData();
+    const sessionType = document.getElementById('session-type').value;
+
+    // Phase automatisch bestimmen
+    let phase;
+    if (sessionType === 'probatorik') {
+      // Probatorik-Sperre: keine Probatorik wenn bereits Kontingent-Sitzungen existieren
+      const nonProba = data.sessions.filter(s => s.patientId === patientId && s.phase !== 'probatorik').length;
+      if (nonProba > 0) {
+        showToast('Probatorik nicht mehr möglich — es existieren bereits Kontingent-Sitzungen.', 'warning');
+        return;
+      }
+      const probaCount = data.sessions.filter(s => s.patientId === patientId && s.phase === 'probatorik').length;
+      if (probaCount >= 8) {
+        showToast('Probatorik-Maximum erreicht (8 Sitzungen).', 'warning');
+        return;
+      }
+      phase = 'probatorik';
+    } else {
+      const result = computeSessionPhase(patientId, data);
+      if (result.error) {
+        // Warnung anzeigen aber Speichern trotzdem erlauben (Nachbewilligung)
+        showToast(result.error, 'warning');
+        return;
+      }
+      phase = result.phase;
+    }
 
     // Rohwerte aus dem Formular lesen. Absichtlich KEIN `|| 50`-Fallback mehr
     // auf duration: negative/ungültige Werte würden sonst in den kanonischen
@@ -525,7 +651,8 @@ function saveSessionClick() {
       id: generateId(),
       patientId,
       date: document.getElementById('session-date').value,
-      type: document.getElementById('session-type').value,
+      type: sessionType,
+      phase,
       duration: parseInt(document.getElementById('session-duration').value, 10),
       note: document.getElementById('session-note').value.trim(),
     };
@@ -1264,6 +1391,10 @@ function wireEventHandlers() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', onForecastParamChange);
   }
+
+  // Session modal: phase-info live updates
+  document.getElementById('session-type').addEventListener('change', updateSessionPhaseInfo);
+  document.getElementById('session-patient-select').addEventListener('change', updateSessionPhaseInfo);
 
   // Import file input
   document.getElementById('import-file').addEventListener('change', handleImportFile);
