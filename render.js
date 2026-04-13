@@ -48,9 +48,7 @@ function getPatientSupervisions(patientId) {
 }
 
 export function countSessionHours(patientId) {
-  return getPatientSessions(patientId)
-    .filter(s => s.phase !== 'probatorik')
-    .reduce((sum, s) => sum + (s.duration / 50), 0);
+  return getPatientSessions(patientId).reduce((sum, s) => sum + (s.duration / 50), 0);
 }
 
 export function countSupervisionHours(patientId) {
@@ -82,10 +80,8 @@ function formatDate(dateStr) {
 export function renderDashboard() {
   const data = getAppData();
   const totalPatients = data.patients.length;
-  // Behandlungsstunden: nur Nicht-Probatorik-Sitzungen
-  const totalSessionHours = data.sessions
-    .filter(s => s.phase !== 'probatorik')
-    .reduce((sum, s) => sum + (s.duration / 50), 0);
+  // Behandlungsstunden: ALLE Sitzungen inkl. Probatorik (zählen zum SV-Verhältnis 1:4)
+  const totalSessionHours = data.sessions.reduce((sum, s) => sum + (s.duration / 50), 0);
   const totalSupervisionHours = data.supervisions.reduce((sum, s) => sum + (s.duration / 50), 0);
 
   // Verhältnis Behandlung : Supervision
@@ -425,7 +421,7 @@ export function renderSupervisionOverview() {
       <p>Noch keine Patienten angelegt.</p>
     </div>`;
   } else {
-    const totalSessionH = data.sessions.filter(x => x.phase !== 'probatorik').reduce((s, x) => s + x.duration / 50, 0);
+    const totalSessionH = data.sessions.reduce((s, x) => s + x.duration / 50, 0);
     const totalSvH = data.supervisions.reduce((s, x) => s + x.duration / 50, 0);
     const totalRequired = totalSessionH / ratio;
     const overallPct = totalRequired > 0 ? Math.min(100, (totalSvH / totalRequired) * 100) : 100;
