@@ -395,7 +395,7 @@ export function validateForecastIntakeRecord(it) {
  */
 export function createDefaultBewilligt() {
   return {
-    kzt1: true,
+    kzt1: false,
     kzt2: false,
     lzt: false,
     lztMax: 60,
@@ -425,70 +425,47 @@ export function computeSessionPhase(patientId, data) {
     .length;
   const nextNum = nonProba + 1; // 1-basierte Sitzungsnummer
 
-  // Phasengrenzen berechnen basierend auf bewilligten Phasen
+  // Keine Phase bewilligt → keine Kontingent-Sitzungen möglich
+  if (!bew.kzt1 && !bew.lzt) {
+    return { error: 'Keine Therapiephase bewilligt. Bitte zuerst im Patienten-Dialog eine Phase freigeben.' };
+  }
+
+  // Phasengrenzen sequentiell aufbauen
   let boundary = 0;
 
-  // KZT-Pfad: KZT1 immer bewilligt
-  if (bew.kzt1 && !bew.lzt) {
-    // Normaler KZT-Pfad (kein direktes LZT)
-    const kzt1End = 12;
+  if (bew.kzt1) {
+    const kzt1End = boundary + 12;
     if (nextNum <= kzt1End) {
-      return { phase: 'kzt1', number: nextNum, max: kzt1End, label: 'KZT 1' };
+      return { phase: 'kzt1', number: nextNum - boundary, max: 12, label: 'KZT 1' };
     }
     boundary = kzt1End;
 
     if (bew.kzt2) {
-      const kzt2End = boundary + 12; // 24
+      const kzt2End = boundary + 12;
       if (nextNum <= kzt2End) {
         return { phase: 'kzt2', number: nextNum - boundary, max: 12, label: 'KZT 2' };
       }
       boundary = kzt2End;
     }
-    // KZT-only: kein LZT bewilligt → Limit erreicht
-    return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary} bewilligt)` };
   }
 
   if (bew.lzt) {
-    if (bew.kzt1 && (bew.kzt2 || !bew.kzt2)) {
-      // KZT1 vorhanden — normaler Pfad mit LZT danach
-      const kzt1End = 12;
-      if (nextNum <= kzt1End) {
-        return { phase: 'kzt1', number: nextNum, max: kzt1End, label: 'KZT 1' };
-      }
-      boundary = kzt1End;
+    const lztMax = bew.lztMax || 60;
+    if (nextNum <= lztMax) {
+      return { phase: 'lzt', number: nextNum, max: lztMax, label: 'LZT' };
+    }
+    boundary = lztMax;
 
-      if (bew.kzt2) {
-        const kzt2End = boundary + 12; // 24
-        if (nextNum <= kzt2End) {
-          return { phase: 'kzt2', number: nextNum - boundary, max: 12, label: 'KZT 2' };
-        }
-        boundary = kzt2End;
+    if (bew.lztV) {
+      const lztVMax = bew.lztVMax || 80;
+      if (nextNum <= lztVMax) {
+        return { phase: 'lzt_v', number: nextNum, max: lztVMax, label: 'LZT-Verlängerung' };
       }
-
-      // LZT: max ist lztMax total (inkl. KZT)
-      const lztMax = bew.lztMax || 60;
-      if (nextNum <= lztMax) {
-        return { phase: 'lzt', number: nextNum, max: lztMax, label: 'LZT' };
-      }
-      boundary = lztMax;
-
-      if (bew.lztV) {
-        const lztVMax = bew.lztVMax || 80;
-        if (nextNum <= lztVMax) {
-          return { phase: 'lzt_v', number: nextNum, max: lztVMax, label: 'LZT-Verlängerung' };
-        }
-        boundary = lztVMax;
-      }
-
-      return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary} bewilligt)` };
+      boundary = lztVMax;
     }
   }
 
-  // Fallback: nur KZT1 (Standard)
-  if (nextNum <= 12) {
-    return { phase: 'kzt1', number: nextNum, max: 12, label: 'KZT 1' };
-  }
-  return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. 12 bewilligt)` };
+  return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary || 0} bewilligt)` };
 }
 
 /**
@@ -511,35 +488,27 @@ export function getPhaseStats(patientId, data) {
     probatorik: { count: probaCount, max: 8 },
   };
 
-  if (hasLzt && !bew.kzt1) {
-    // Direkter LZT-Pfad (ohne KZT) — theoretisch nicht vorgesehen, aber defensiv
-    stats.lzt = { count: Math.min(nonProba, bew.lztMax || 60), max: bew.lztMax || 60 };
-    if (bew.lztV) {
-      stats.lzt_v = { count: Math.max(0, nonProba - (bew.lztMax || 60)), max: (bew.lztVMax || 80) - (bew.lztMax || 60) };
-    }
-    return stats;
-  }
-
-  // Normaler Pfad: KZT1 → (KZT2) → (LZT) → (LZT-V)
   let remaining = nonProba;
 
-  stats.kzt1 = { count: Math.min(remaining, 12), max: 12 };
-  remaining = Math.max(0, remaining - 12);
-
-  if (bew.kzt2) {
-    stats.kzt2 = { count: Math.min(remaining, 12), max: 12 };
+  if (bew.kzt1) {
+    stats.kzt1 = { count: Math.min(remaining, 12), max: 12 };
     remaining = Math.max(0, remaining - 12);
+
+    if (bew.kzt2) {
+      stats.kzt2 = { count: Math.min(remaining, 12), max: 12 };
+      remaining = Math.max(0, remaining - 12);
+    }
   }
 
   if (bew.lzt) {
-    const kztTotal = 12 + (bew.kzt2 ? 12 : 0);
+    const kztTotal = (bew.kzt1 ? 12 : 0) + (bew.kzt2 ? 12 : 0);
     const lztSlots = (bew.lztMax || 60) - kztTotal;
-    stats.lzt = { count: Math.min(remaining, lztSlots), max: lztSlots };
-    remaining = Math.max(0, remaining - lztSlots);
+    stats.lzt = { count: Math.min(remaining, Math.max(0, lztSlots)), max: Math.max(0, lztSlots) };
+    remaining = Math.max(0, remaining - Math.max(0, lztSlots));
 
     if (bew.lztV) {
       const lztVSlots = (bew.lztVMax || 80) - (bew.lztMax || 60);
-      stats.lzt_v = { count: Math.min(remaining, lztVSlots), max: lztVSlots };
+      stats.lzt_v = { count: Math.min(remaining, Math.max(0, lztVSlots)), max: Math.max(0, lztVSlots) };
     }
   }
 

@@ -150,7 +150,8 @@ export function renderDashboard() {
       const status = getSupervisionStatus(p.id);
       const bew = p.bewilligt || createDefaultBewilligt();
       // Gesamtkontingent aus bewilligt ableiten
-      let kontingent = 12;
+      let kontingent = 0;
+      if (bew.kzt1) kontingent = 12;
       if (bew.kzt2) kontingent = 24;
       if (bew.lzt) kontingent = bew.lztMax || 60;
       if (bew.lztV) kontingent = bew.lztVMax || 80;
@@ -202,7 +203,8 @@ export function renderPatientList() {
     data.patients.forEach(p => {
       const status = getSupervisionStatus(p.id);
       const bew = p.bewilligt || createDefaultBewilligt();
-      let kontingent = 12;
+      let kontingent = 0;
+      if (bew.kzt1) kontingent = 12;
       if (bew.kzt2) kontingent = 24;
       if (bew.lzt) kontingent = bew.lztMax || 60;
       if (bew.lztV) kontingent = bew.lztVMax || 80;

@@ -427,8 +427,9 @@ function openPatientModal(editId) {
     document.getElementById('patient-name').value = '';
     document.getElementById('patient-kuerzel').value = '';
     document.getElementById('patient-start').value = '';
-    // Bewilligt-Defaults
+    // Bewilligt-Defaults: nichts vorausgewählt
     const bew = createDefaultBewilligt();
+    document.getElementById('patient-bew-kzt1').checked = bew.kzt1;
     document.getElementById('patient-bew-kzt2').checked = bew.kzt2;
     document.getElementById('patient-bew-lzt').checked = bew.lzt;
     document.getElementById('patient-bew-lzt-max').value = bew.lztMax;
@@ -442,6 +443,7 @@ function openPatientModal(editId) {
       document.getElementById('patient-start').value = p.startDate || '';
       // Bewilligt aus Patient-Daten laden
       const bew = p.bewilligt || createDefaultBewilligt();
+      document.getElementById('patient-bew-kzt1').checked = bew.kzt1;
       document.getElementById('patient-bew-kzt2').checked = bew.kzt2;
       document.getElementById('patient-bew-lzt').checked = bew.lzt;
       document.getElementById('patient-bew-lzt-max').value = bew.lztMax || 60;
@@ -468,7 +470,7 @@ function savePatientClick() {
     const lztVMax = parseInt(document.getElementById('patient-bew-lztv-max').value, 10);
 
     const bewilligt = {
-      kzt1: true,
+      kzt1: document.getElementById('patient-bew-kzt1').checked,
       kzt2: document.getElementById('patient-bew-kzt2').checked,
       lzt: document.getElementById('patient-bew-lzt').checked,
       lztMax: Number.isFinite(lztMax) && lztMax > 0 ? lztMax : 60,
@@ -477,7 +479,8 @@ function savePatientClick() {
     };
 
     // Gesamtkontingent für Abwärtskompatibilität berechnen
-    let kontingent = 12; // KZT1
+    let kontingent = 0;
+    if (bewilligt.kzt1) kontingent = 12;
     if (bewilligt.kzt2) kontingent = 24;
     if (bewilligt.lzt) kontingent = bewilligt.lztMax;
     if (bewilligt.lztV) kontingent = bewilligt.lztVMax;
@@ -536,9 +539,26 @@ function openSessionModal(patientId) {
   if (defaultId) select.value = defaultId;
 
   document.getElementById('session-date').value = new Date().toISOString().split('T')[0];
-  document.getElementById('session-type').value = 'einzel';
-  document.getElementById('session-duration').value = 50;
   document.getElementById('session-note').value = '';
+
+  // Default-Sitzungstyp: Probatorik, solange noch verfügbar und keine
+  // Nicht-Probatorik-Sitzung für diesen Patienten existiert.
+  const selectedPatientId = document.getElementById('session-patient-select').value;
+  const currentData = state.getAppData();
+  const hasNonProba = selectedPatientId && currentData.sessions.some(
+    s => s.patientId === selectedPatientId && s.phase !== 'probatorik'
+  );
+  const probaCount = selectedPatientId ? currentData.sessions.filter(
+    s => s.patientId === selectedPatientId && s.phase === 'probatorik'
+  ).length : 0;
+
+  if (!hasNonProba && probaCount < 8) {
+    document.getElementById('session-type').value = 'probatorik';
+    document.getElementById('session-duration').value = 50;
+  } else {
+    document.getElementById('session-type').value = 'einzel';
+    document.getElementById('session-duration').value = 50;
+  }
 
   // Phase-Info aktualisieren bei Auswahländerungen
   updateSessionPhaseInfo();
@@ -608,6 +628,27 @@ function updateSessionPhaseInfo() {
     infoEl.style.color = 'var(--gray-700)';
     infoEl.textContent = `→ ${result.label}, Sitzung ${result.number} von ${result.max}`;
   }
+}
+
+/**
+ * Bei Patient-Wechsel im Session-Modal: Typ-Default neu setzen.
+ * Probatorik als Default, solange verfügbar und noch keine KZT/LZT-Sitzung existiert.
+ */
+function onSessionPatientChange() {
+  const patientId = document.getElementById('session-patient-select').value;
+  const data = state.getAppData();
+  if (patientId) {
+    const hasNonProba = data.sessions.some(s => s.patientId === patientId && s.phase !== 'probatorik');
+    const probaCount = data.sessions.filter(s => s.patientId === patientId && s.phase === 'probatorik').length;
+    if (!hasNonProba && probaCount < 8) {
+      document.getElementById('session-type').value = 'probatorik';
+      document.getElementById('session-duration').value = 50;
+    } else {
+      document.getElementById('session-type').value = 'einzel';
+      document.getElementById('session-duration').value = 50;
+    }
+  }
+  updateSessionPhaseInfo();
 }
 
 function saveSessionClick() {
@@ -1394,7 +1435,7 @@ function wireEventHandlers() {
 
   // Session modal: phase-info live updates
   document.getElementById('session-type').addEventListener('change', updateSessionPhaseInfo);
-  document.getElementById('session-patient-select').addEventListener('change', updateSessionPhaseInfo);
+  document.getElementById('session-patient-select').addEventListener('change', onSessionPatientChange);
 
   // Import file input
   document.getElementById('import-file').addEventListener('change', handleImportFile);
