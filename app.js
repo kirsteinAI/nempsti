@@ -42,6 +42,19 @@ import {
 // ============ STATE FOR MODALS ============
 let _sessionDefaultPatientId = null;
 let _lastDriveError = null;
+// Codex-v4 fix: Wenn true, unterdrückt updateAppData() den IDB-Write.
+// Wird gesetzt, wenn initApp() eine Migration-Failure erkennt und den
+// Original-IDB-Payload für einen künftigen Code-Hotfix bewahren will.
+// Wird gecleart, sobald ein expliziter Recovery-Pfad (Import, Restore,
+// Clear) erfolgreich einen durable Write durchführt.
+let _recoveryMode = false;
+
+/** Signalisiert Test-Hooks, dass initApp() abgeschlossen ist. */
+function signalReady() {
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    window.__nempstiReady = true;
+  }
+}
 
 // ============ INIT ============
 
@@ -74,12 +87,24 @@ async function initApp() {
   //    öffnen wir das Modal und bleiben stehen — die Handler aus Schritt 2
   //    sind bereits wired, sodass "App neu laden" funktioniert.
   let appData;
+  // Tracks whether the IDB payload couldn't be used (validation or migration
+  // failure). Suppresses IDB persistence of the empty placeholder so the
+  // original payload stays intact for recovery (Drive restore, JSON import,
+  // or a future code hotfix).
+  let loadFailed = false;
   if (loaded) {
     const validation = validateAppData(loaded);
     if (!validation.ok) {
       console.error('[app] IDB payload invalid:', validation.error);
       showToast('Lokale Daten beschädigt. Bitte über Daten-Tab aus Drive wiederherstellen oder JSON-Import nutzen.', 'danger');
       appData = createEmptyAppData();
+      // Gleiche Recovery-Logik wie bei Migration-Failure: IDB nicht
+      // überschreiben, Recovery-Modus aktivieren. Der Original-Payload
+      // bleibt in IDB für den Fall, dass eine zukünftige Validator-Korrektur
+      // ihn wieder akzeptiert.
+      loadFailed = true;
+      _recoveryMode = true;
+      state.setRecoveryMode(true);
     } else {
       const mig = runMigrations(validation.data);
       if (!mig.ok) {
@@ -90,10 +115,25 @@ async function initApp() {
           // zurückliefert. persist=false, damit wir NICHT die gute IDB-Daten
           // überschreiben — sonst wäre der Schaden beim nächsten Update total.
           state.setAppData(createEmptyAppData(), { persist: false, flagDirty: false });
+          signalReady();
           return;
         }
         showToast(mig.error, 'danger');
+        // Codex-v3 fix: KEIN durableWrite(rollback) — der Rollback ist ein
+        // structuredClone des IDB-Inhalts, also identisch mit dem, was schon
+        // in IDB steht. Ihn zurückzuschreiben ist ein No-Op, der beim
+        // nächsten Reload dieselbe Failure auslöst (Boot-Loop).
+        //
+        // Stattdessen: KEIN early return. Boot läuft weiter mit leerem
+        // Platzhalter-State (persist: false, damit IDB unberührt bleibt).
+        // Drive, Service Worker und Event-Handler werden normal initialisiert,
+        // sodass der User Drive-Restore oder JSON-Import als Recovery nutzen
+        // kann. Bei einem Code-Hotfix der Migration wird der nächste Reload
+        // den IDB-Inhalt korrekt migrieren.
         appData = createEmptyAppData();
+        loadFailed = true;
+        _recoveryMode = true;
+        state.setRecoveryMode(true);
       } else {
         appData = mig.data;
       }
@@ -103,8 +143,10 @@ async function initApp() {
   }
 
   // 5) State setzen (ohne IDB-Write zurückzuschreiben, es sei denn wir haben
-  //    tatsächlich migriert/initialisiert).
-  const shouldPersist = !loaded || appData.version !== (loaded && loaded.version);
+  //    tatsächlich migriert/initialisiert). Bei Migration-Failure bleibt IDB
+  //    unangetastet — der Original-Payload soll dort erhalten bleiben, damit
+  //    ein Code-Hotfix der Migration beim nächsten Reload greifen kann.
+  const shouldPersist = !loadFailed && (!loaded || appData.version !== (loaded && loaded.version));
   state.setAppData(appData, { persist: shouldPersist, flagDirty: false });
 
   // 6) Setting-Inputs synchronisieren.
@@ -113,7 +155,8 @@ async function initApp() {
   syncForecastInputs();
 
   // 7) DSGVO-Check. Wenn Zustimmung fehlt → Modal anzeigen.
-  if (!appData.settings?.dsgvoAcknowledgedAt) {
+  const dsgvoAccepted = !!appData.settings?.dsgvoAcknowledgedAt;
+  if (!dsgvoAccepted) {
     openModal('modal-dsgvo');
   }
 
@@ -149,10 +192,16 @@ async function initApp() {
   });
 
   // 10) Drive-Init im Hintergrund (blockiert nicht das erste Render).
-  drive.initDrive().catch(err => {
-    console.error('[app] drive init failed:', err);
-    _lastDriveError = err;
-  });
+  //     D1 fix: Nur starten, wenn DSGVO bereits akzeptiert ist. Beim ersten
+  //     Start (DSGVO noch nicht akzeptiert) wird initDrive() erst in
+  //     acceptDsgvo() aufgerufen, sodass kein Request an accounts.google.com
+  //     geht, bevor der Nutzer zugestimmt hat (GDPR/TTDSG §25).
+  if (dsgvoAccepted) {
+    drive.initDrive().catch(err => {
+      console.error('[app] drive init failed:', err);
+      _lastDriveError = err;
+    });
+  }
 
   // 9) Service Worker registrieren.
   registerServiceWorker();
@@ -164,6 +213,8 @@ async function initApp() {
   if (new URLSearchParams(window.location.search).get('debug') === '1') {
     openDiagnose();
   }
+
+  signalReady();
 }
 
 // ============ SYNC-GATE HELPERS (§7.3.1) ============
@@ -232,9 +283,17 @@ async function performFirstDriveLoad() {
         }
         throw new Error('Migration des Drive-Backups fehlgeschlagen: ' + mig.error);
       }
+      // Codex-v4 fix: Lokale DSGVO-Zustimmung bewahren, falls der Drive-
+      // Payload sie nicht enthält (Legacy-Backups vor v2). Ohne dieses Merge
+      // würde eine gerade erteilte Zustimmung durch den Restore überschrieben.
+      const currentDsgvoAck = state.getAppData().settings?.dsgvoAcknowledgedAt;
+      if (!mig.data.settings.dsgvoAcknowledgedAt && currentDsgvoAck) {
+        mig.data.settings.dsgvoAcknowledgedAt = currentDsgvoAck;
+      }
       // Lokalen Stand durch Drive-Inhalt ersetzen. flagDirty: false, weil
-      // local jetzt per Definition == Drive ist.
-      state.setAppData(mig.data, { persist: true, flagDirty: false });
+      // local jetzt per Definition == Drive ist. durable: true, damit IDB-
+      // Write abgeschlossen ist, bevor wir Erfolg signalisieren (D2 fix).
+      await state.setAppData(mig.data, { persist: true, durable: true, flagDirty: false });
       // Dirty-Flag könnte aus einer Mutation VOR dem Drive-Load stammen
       // (z.B. DSGVO-Akzeptanz). Den explizit clearen, weil der neue State
       // aus Drive kommt und damit "synchron" ist.
@@ -269,6 +328,23 @@ function acceptDsgvo() {
   });
   closeModal('modal-dsgvo');
   showToast('Einverständnis gespeichert.', 'success');
+
+  // M4 fix: Persistent Storage anfragen, damit der Browser IDB nicht unter
+  // Speicherdruck evicten kann. PWAs auf dem Homescreen bekommen bevorzugte
+  // Behandlung. Kein User-Prompt — der Browser entscheidet still.
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
+  // D1 fix: Drive-Init erst NACH DSGVO-Zustimmung starten, damit kein
+  // Request an accounts.google.com geht, bevor der Nutzer eingewilligt hat.
+  // Der Sync-Gate-Listener und onDriveStatusChange wurden bereits in initApp()
+  // registriert, sodass performFirstDriveLoad() sauber feuert, sobald Drive
+  // READY wird.
+  drive.initDrive().catch(err => {
+    console.error('[app] drive init after DSGVO failed:', err);
+    _lastDriveError = err;
+  });
 }
 
 function leaveDsgvo() {
@@ -304,7 +380,10 @@ function registerServiceWorker() {
 }
 
 // ============ VISIBILITY / DRIVE SYNC ============
+let _syncInProgress = false; // H2 fix: verhindert doppelte parallele Sync-Aufrufe
+
 async function syncDirtyToDrive() {
+  if (_syncInProgress) return;
   if (!state.isDriveDirty()) return;
   // Sync-Gate-Guard (§7.3.1). Blockiert Sync-OUT, solange der Gate nicht
   // ALLOWED ist — verhindert, dass ein noch nicht aus Drive geladener
@@ -315,6 +394,7 @@ async function syncDirtyToDrive() {
     console.info('[app] syncDirtyToDrive: gate is', drive.getSyncGate(), '— skipping');
     return;
   }
+  _syncInProgress = true;
   try {
     await db.flushPendingWrites();
     await drive.backupNow(state.getAppData());
@@ -323,6 +403,8 @@ async function syncDirtyToDrive() {
     _lastDriveError = err;
     // Fehler werden beim nächsten visibilitychange automatisch erneut versucht
     // (dirty-Flag bleibt gesetzt).
+  } finally {
+    _syncInProgress = false;
   }
 }
 
@@ -654,8 +736,10 @@ function deleteGroup(groupId) {
 
 // ============ SETTINGS ============
 function updateSettings() {
-  const ratio = parseInt(document.getElementById('setting-ratio').value, 10) || 4;
-  const defaultKontingent = parseInt(document.getElementById('setting-kontingent').value, 10) || 60;
+  // M7 fix: Werte auf gültigen Bereich clampen — HTML min/max ist client-
+  // seitig umgehbar (DevTools, Paste, manche Mobile-Browser).
+  const ratio = Math.max(1, Math.min(20, parseInt(document.getElementById('setting-ratio').value, 10) || 4));
+  const defaultKontingent = Math.max(1, Math.min(999, parseInt(document.getElementById('setting-kontingent').value, 10) || 60));
   state.updateAppData(data => {
     data.settings.supervisionRatio = ratio;
     data.settings.defaultKontingent = defaultKontingent;
@@ -933,13 +1017,19 @@ function handleImportFile(event) {
 
       showConfirmDialog(
         `Import: ${pCount} Patienten, ${sCount} Sitzungen, ${svCount} Supervisionen. Bestehende Daten werden überschrieben. Fortfahren?`,
-        () => {
+        async () => {
           // Bestehende DSGVO-Ack bewahren, falls Import sie nicht mitbringt.
           const current = state.getAppData();
           if (!pendingData.settings.dsgvoAcknowledgedAt && current.settings?.dsgvoAcknowledgedAt) {
             pendingData.settings.dsgvoAcknowledgedAt = current.settings.dsgvoAcknowledgedAt;
           }
-          state.setAppData(pendingData, { persist: true, flagDirty: true });
+          try {
+            // D2 fix: durable write — Erfolg erst nach IDB-Bestätigung anzeigen.
+            await state.setAppData(pendingData, { persist: true, durable: true, flagDirty: true });
+          } catch (err) {
+            showToast('Import-Speicherung fehlgeschlagen: ' + (err?.message || err), 'danger');
+            return;
+          }
           // JSON-Import ist eine explizite User-Entscheidung, den lokalen
           // Stand zur neuen Wahrheit zu machen. Gate auf ALLOWED setzen,
           // damit der importierte Stand auf Drive hochgeladen wird (§7.3.1).
@@ -962,11 +1052,17 @@ function handleImportFile(event) {
 }
 
 function clearAllDataClick() {
-  showConfirmDialog('ACHTUNG: Alle Daten werden unwiderruflich gelöscht! Fortfahren?', () => {
+  showConfirmDialog('ACHTUNG: Alle Daten werden unwiderruflich gelöscht! Fortfahren?', async () => {
     const prevSettings = state.getAppData().settings;
     const blank = createEmptyAppData();
     blank.settings = { ...blank.settings, dsgvoAcknowledgedAt: prevSettings?.dsgvoAcknowledgedAt };
-    state.setAppData(blank, { persist: true, flagDirty: true });
+    try {
+      // D2 fix: durable write — Erfolg erst nach IDB-Bestätigung anzeigen.
+      await state.setAppData(blank, { persist: true, durable: true, flagDirty: true });
+    } catch (err) {
+      showToast('Löschen fehlgeschlagen: ' + (err?.message || err), 'danger');
+      return;
+    }
     // "Alle Daten löschen" ist eine explizite User-Aktion, den leeren Zustand
     // zur neuen Wahrheit zu machen — inklusive Drive. Gate auf ALLOWED setzen,
     // damit der leere Stand auch auf Drive synchronisiert wird (§7.3.1).
@@ -989,16 +1085,23 @@ async function driveBackupNowClick() {
     return;
   }
   if (gate === drive.SyncGate.FAILED) {
-    // User versucht es erneut. Wir triggern den Load nochmal, und NACH
-    // erfolgreichem Load pushen wir die aktuellen lokalen Änderungen hoch.
-    try {
-      await performFirstDriveLoad();
-      if (drive.getSyncGate() !== drive.SyncGate.ALLOWED) {
-        // Load ist wieder fehlgeschlagen — Fehler wurde bereits geloggt.
+    // H1 fix: Wenn lokal bedeutungsvolle Daten existieren, ist der User-
+    // Intent klar: "meine lokalen Daten auf Drive sichern." NICHT den alten
+    // Drive-Stand laden (das würde die lokalen Daten überschreiben — genau
+    // das Gegenteil von "Jetzt sichern"). Gate direkt auf ALLOWED setzen.
+    if (hasMeaningfulData(state.getAppData())) {
+      drive.setSyncGate(drive.SyncGate.ALLOWED);
+    } else {
+      // Lokal leer: Drive-Load versuchen, damit wir nicht einen leeren
+      // Stand nach Drive pushen und damit das existierende Backup zerstören.
+      try {
+        await performFirstDriveLoad();
+        if (drive.getSyncGate() !== drive.SyncGate.ALLOWED) {
+          return;
+        }
+      } catch {
         return;
       }
-    } catch {
-      return;
     }
   }
   try {
@@ -1021,7 +1124,14 @@ async function driveRestoreClick() {
       if (!validation.ok) { showToast('Drive-Backup ungültig: ' + validation.error, 'danger'); return; }
       const mig = runMigrations(validation.data);
       if (!mig.ok) { showToast(mig.error, 'danger'); return; }
-      state.setAppData(mig.data, { persist: true, flagDirty: false });
+      // DSGVO-Ack bewahren, falls Drive-Backup sie nicht enthält (Legacy).
+      // Gleiches Pattern wie performFirstDriveLoad und handleImportFile.
+      const currentAck = state.getAppData().settings?.dsgvoAcknowledgedAt;
+      if (!mig.data.settings.dsgvoAcknowledgedAt && currentAck) {
+        mig.data.settings.dsgvoAcknowledgedAt = currentAck;
+      }
+      // D2 fix: durable write — IDB-Bestätigung abwarten vor Erfolgs-Toast.
+      await state.setAppData(mig.data, { persist: true, durable: true, flagDirty: false });
       state.clearDriveDirty();
       document.getElementById('setting-ratio').value = mig.data.settings.supervisionRatio;
       document.getElementById('setting-kontingent').value = mig.data.settings.defaultKontingent;
@@ -1314,9 +1424,14 @@ if (document.readyState === 'loading') {
   initApp();
 }
 
-// Expose test hooks so E2E can assert init complete, trigger flushes and
-// simulate visibilitychange without depending on internal state.
-window.__nempstiReady = true;
-window.__nempstiFlush = () => db.flushPendingWrites();
-window.__nempstiSyncToDrive = () => syncDirtyToDrive();
-window.__nempstiGetAppData = () => state.getAppData();
+// Expose test hooks ONLY on localhost so E2E can assert init complete,
+// trigger flushes and simulate visibilitychange. On production (GitHub Pages)
+// these globals do not exist, eliminating the data-exfiltration surface
+// described in H2 of the security review.
+// Test hooks: only on localhost, and the ready flag is set at the end of
+// initApp() (not at module-load time) so tests can reliably wait for init.
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  window.__nempstiFlush = () => db.flushPendingWrites();
+  window.__nempstiSyncToDrive = () => syncDirtyToDrive();
+  window.__nempstiGetAppData = () => state.getAppData();
+}

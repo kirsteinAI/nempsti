@@ -58,9 +58,16 @@ function isIdString(v) {
 
 function isDateString(v) {
   if (typeof v !== 'string' || !FORMAT.DATE_PATTERN.test(v)) return false;
-  // Optional: Plausibilität (nicht die exakte Kalenderprüfung, aber grobe Grenzen).
+  // Grobe Plausibilität für Bereichsgrenzen.
   const [y, m, d] = v.split('-').map(Number);
-  return m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2999;
+  if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2999)) return false;
+  // M4 fix: Exakte Kalenderprüfung via Round-Trip — lehnt unmögliche Tage
+  // wie 2026-02-30 oder 2026-04-31 ab. UTC-Anker verhindert DST-Drift.
+  try {
+    return new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v;
+  } catch {
+    return false;
+  }
 }
 
 function fail(path, reason) {

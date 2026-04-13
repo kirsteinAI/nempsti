@@ -67,8 +67,12 @@ export function getSupervisionStatus(patientId) {
 
 function formatDate(dateStr) {
   if (!dateStr) return '–';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  // H6 fix: ISO-Datumstrings (YYYY-MM-DD) werden von new Date() als UTC
+  // geparst. In negativen Zeitzonen (z.B. UTC-1) ergibt das den Vortag.
+  // Manuelle Zerlegung vermeidet das Date-Objekt und ist timezone-sicher.
+  const [y, m, d] = dateStr.split('-');
+  if (!y || !m || !d) return dateStr;
+  return `${d}.${m}.${y}`;
 }
 
 // ============ TAB RENDERERS ============
@@ -93,7 +97,7 @@ export function renderDashboard() {
       <div class="stat-value">${totalSessionHours.toFixed(1)}</div>
       <div class="stat-label">Behandlungsstd.</div>
     </div>
-    <div class="stat-card ${totalSupervisionHours < totalSessionHours / data.settings.supervisionRatio ? 'danger' : 'success'}">
+    <div class="stat-card">
       <div class="stat-value">${totalSupervisionHours.toFixed(1)}</div>
       <div class="stat-label">Supervisionsstd.</div>
     </div>

@@ -32,3 +32,16 @@ patientenstunden-*.json
 
 # Local source material (Excel planning aids, reference files)
 /src
+
+# Testing & development — not needed on GitHub Pages (production).
+# Tests run locally only (no CI configured). These files stay on disk
+# but must not be served to production via GitHub Pages.
+/tests
+playwright.config.ts
+test-mapping.json
+run-tests.sh
+
+# Dev tooling config — not part of the deployed app
+package.json
+package-lock.json
+.claude/
