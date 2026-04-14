@@ -14,6 +14,10 @@ let _driveDirty = false;
 // protect the original IDB payload after a migration failure. Cleared by
 // a successful durable write (import/restore/clear).
 let _recoveryMode = false;
+// Codex-v7 F2: monotonic counter for state mutations. Used by the Drive
+// sync path to detect if a mutation happened during an async upload — if
+// yes, don't clear the dirty flag (edits would otherwise stay unsynced).
+let _mutationGeneration = 0;
 
 // Render- und Drive-Hooks werden von app.js zur Laufzeit gesetzt, um
 // zirkuläre Imports zu vermeiden und Dependency-Injection zu ermöglichen.
@@ -101,6 +105,7 @@ export function setAppData(data, opts = {}) {
  */
 export function updateAppData(patchFn) {
   patchFn(_appData);
+  _mutationGeneration++; // Codex-v7 F2: jede Mutation bumpt die Generation
   if (_renderAll) {
     try { _renderAll(); } catch (err) { console.error('[state] renderAll failed:', err); }
   }
@@ -127,4 +132,32 @@ export function isDriveDirty() {
 
 export function clearDriveDirty() {
   _driveDirty = false;
+}
+
+/**
+ * Codex-v7 F2: Gibt die aktuelle Mutations-Generation zurück. Der Drive-
+ * Sync-Pfad capturet diesen Wert VOR dem Upload und prüft ihn NACH dem
+ * Upload: wenn er sich geändert hat, wurde während des Uploads lokal
+ * mutiert — in dem Fall darf `clearDriveDirty()` nicht aufgerufen werden,
+ * sonst bleiben die neuen Edits unsynced.
+ */
+export function getMutationGeneration() {
+  return _mutationGeneration;
+}
+
+/**
+ * Codex-v7 F2: Löscht den Dirty-Flag nur, wenn seit `capturedGeneration`
+ * keine Mutation stattgefunden hat. Verhindert, dass ein erfolgreicher
+ * Drive-Upload den Dirty-Flag löscht, der zwischenzeitlich durch eine
+ * User-Bearbeitung neu gesetzt wurde.
+ *
+ * @param {number} capturedGeneration — Wert von getMutationGeneration() vor dem Upload
+ * @returns {boolean} true wenn dirty-Flag tatsächlich gelöscht wurde
+ */
+export function clearDriveDirtyIfUnchanged(capturedGeneration) {
+  if (_mutationGeneration === capturedGeneration) {
+    _driveDirty = false;
+    return true;
+  }
+  return false;
 }

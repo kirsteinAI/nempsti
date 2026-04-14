@@ -216,11 +216,20 @@ async function driveFetch(url, options = {}) {
 }
 
 async function findBackupFile() {
-  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(`name='${BACKUP_FILENAME}'`)}&fields=files(id,name,modifiedTime)`;
+  // Codex-v7 F3: orderBy=modifiedTime desc garantiert deterministische
+  // Auswahl, falls der appDataFolder historische Duplikate enthält (z.B.
+  // aus der Zeit vor dem H2-Concurrency-Guard). Wir nehmen immer die
+  // zuletzt modifizierte Datei — das ist die aktuellste und verhindert,
+  // dass ein stale orphan file gewählt wird.
+  const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent(`name='${BACKUP_FILENAME}'`)}&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime)`;
   const resp = await driveFetch(url);
   if (!resp.ok) throw await httpError(resp, 'List failed');
   const json = await resp.json();
-  const first = (json.files || [])[0];
+  const files = json.files || [];
+  if (files.length > 1) {
+    console.warn(`[drive] ${files.length} Duplikate von ${BACKUP_FILENAME} im appDataFolder gefunden — nutze neueste (modifiedTime: ${files[0].modifiedTime})`);
+  }
+  const first = files[0];
   return first ? first.id : null;
 }
 

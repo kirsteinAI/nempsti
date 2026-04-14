@@ -399,8 +399,12 @@ async function syncDirtyToDrive() {
   _syncInProgress = true;
   try {
     await db.flushPendingWrites();
+    // Codex-v7 F2: Mutations-Generation VOR dem Upload capturen. Wenn der
+    // User während des Uploads lokal mutiert, wird dirty NICHT gelöscht —
+    // sonst würden die neuen Edits unsynced bleiben.
+    const genBefore = state.getMutationGeneration();
     await drive.backupNow(state.getAppData());
-    state.clearDriveDirty();
+    state.clearDriveDirtyIfUnchanged(genBefore);
   } catch (err) {
     _lastDriveError = err;
     // Fehler werden beim nächsten visibilitychange automatisch erneut versucht
@@ -1274,8 +1278,11 @@ async function driveBackupNowClick() {
   }
   try {
     await db.flushPendingWrites();
+    // Codex-v7 F2: Generation capturen, damit User-Edits während des
+    // Uploads nicht durch ein stilles clearDriveDirty verloren gehen.
+    const genBefore = state.getMutationGeneration();
     await drive.backupNow(state.getAppData());
-    state.clearDriveDirty();
+    state.clearDriveDirtyIfUnchanged(genBefore);
     showToast('Drive-Backup erfolgreich.', 'success');
   } catch (err) {
     _lastDriveError = err;
@@ -1285,6 +1292,12 @@ async function driveBackupNowClick() {
 
 async function driveRestoreClick() {
   showConfirmDialog('Lokale Daten mit Drive-Backup überschreiben? Bestehende Daten gehen verloren.', async () => {
+    // Codex-v7 F1: Blocking-Overlay während des async Drive-Downloads,
+    // damit keine zwischenzeitlichen User-Edits durch den Restore stillschweigend
+    // überschrieben werden. Der Overlay deckt die gesamte UI ab und hat keine
+    // Close-Buttons — er schließt sich nur, wenn der Restore (erfolgreich oder
+    // mit Fehler) abgeschlossen ist.
+    openModal('modal-restore-busy');
     try {
       const remote = await drive.restore();
       if (!remote) { showToast('Kein Backup im Drive gefunden.', 'warning'); return; }
@@ -1312,6 +1325,8 @@ async function driveRestoreClick() {
     } catch (err) {
       _lastDriveError = err;
       showToast('Drive-Restore fehlgeschlagen: ' + (err?.message || err), 'danger');
+    } finally {
+      closeModal('modal-restore-busy');
     }
   });
 }
@@ -1407,7 +1422,7 @@ function wireEventHandlers() {
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', e => {
       // DSGVO Modal ist nicht-dismissable via backdrop.
-      if (overlay.id === 'modal-dsgvo' || overlay.id === 'modal-version-conflict') return;
+      if (overlay.id === 'modal-dsgvo' || overlay.id === 'modal-version-conflict' || overlay.id === 'modal-restore-busy') return;
       if (e.target === overlay) closeModal(overlay.id);
     });
   });

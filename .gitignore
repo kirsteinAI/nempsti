@@ -45,3 +45,4 @@ run-tests.sh
 package.json
 package-lock.json
 .claude/
+CLAUDE.md

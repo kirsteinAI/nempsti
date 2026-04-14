@@ -462,6 +462,22 @@
   </div>
 </div>
 
+<!-- BUSY OVERLAY für Drive-Restore (Codex-v7 F1) -->
+<!-- Blockiert jede User-Interaktion während des async Drive-Downloads,
+     damit keine zwischenzeitlichen Edits durch den Restore überschrieben
+     werden. Hat KEINE Close-Buttons und KEINE backdrop-click Behandlung. -->
+<div class="modal-overlay" id="modal-restore-busy">
+  <div class="modal" style="max-width:320px;text-align:center;">
+    <div class="modal-header" style="justify-content:center;">
+      <h2>Wird aus Drive geladen…</h2>
+    </div>
+    <p style="font-size:0.9rem;color:var(--gray-700);margin:0;">
+      Bitte warten, bis der Download abgeschlossen ist.<br>
+      Änderungen sind während dieser Zeit nicht möglich.
+    </p>
+  </div>
+</div>
+
 <!-- DIAGNOSE PANEL (§5.7) -->
 <div id="diagnose-panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
