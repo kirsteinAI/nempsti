@@ -420,30 +420,32 @@ export function computeSessionPhase(patientId, data) {
   if (!patient) return { error: 'Patient nicht gefunden' };
 
   const bew = patient.bewilligt || createDefaultBewilligt();
-  const nonProba = data.sessions
+  // Laufender Therapiestunden-Zähler (1 pro 50 Min.). Die neue Sitzung
+  // bekommt das Phase-Label der Phase, in der ihre ERSTE Stunde liegt.
+  const therapyHours = data.sessions
     .filter(s => s.patientId === patientId && s.phase !== 'probatorik')
-    .length;
-  const nextNum = nonProba + 1; // 1-basierte Sitzungsnummer
+    .reduce((sum, s) => sum + s.duration / 50, 0);
+  const startHour = therapyHours + 1; // 1-basierte Position der ersten neuen Stunde
 
   // Keine Phase bewilligt → keine Kontingent-Sitzungen möglich
   if (!bew.kzt1 && !bew.lzt) {
     return { error: 'Keine Therapiephase bewilligt. Bitte zuerst im Patienten-Dialog eine Phase freigeben.' };
   }
 
-  // Phasengrenzen sequentiell aufbauen
+  // Phasengrenzen sequentiell aufbauen (alles in Therapiestunden)
   let boundary = 0;
 
   if (bew.kzt1) {
     const kzt1End = boundary + 12;
-    if (nextNum <= kzt1End) {
-      return { phase: 'kzt1', number: nextNum - boundary, max: 12, label: 'KZT 1' };
+    if (startHour <= kzt1End) {
+      return { phase: 'kzt1', number: Math.ceil(startHour - boundary), max: 12, label: 'KZT 1' };
     }
     boundary = kzt1End;
 
     if (bew.kzt2) {
       const kzt2End = boundary + 12;
-      if (nextNum <= kzt2End) {
-        return { phase: 'kzt2', number: nextNum - boundary, max: 12, label: 'KZT 2' };
+      if (startHour <= kzt2End) {
+        return { phase: 'kzt2', number: Math.ceil(startHour - boundary), max: 12, label: 'KZT 2' };
       }
       boundary = kzt2End;
     }
@@ -451,21 +453,21 @@ export function computeSessionPhase(patientId, data) {
 
   if (bew.lzt) {
     const lztMax = bew.lztMax || 60;
-    if (nextNum <= lztMax) {
-      return { phase: 'lzt', number: nextNum, max: lztMax, label: 'LZT' };
+    if (startHour <= lztMax) {
+      return { phase: 'lzt', number: Math.ceil(startHour), max: lztMax, label: 'LZT' };
     }
     boundary = lztMax;
 
     if (bew.lztV) {
       const lztVMax = bew.lztVMax || 80;
-      if (nextNum <= lztVMax) {
-        return { phase: 'lzt_v', number: nextNum, max: lztVMax, label: 'LZT-Verlängerung' };
+      if (startHour <= lztVMax) {
+        return { phase: 'lzt_v', number: Math.ceil(startHour), max: lztVMax, label: 'LZT-Verlängerung' };
       }
       boundary = lztVMax;
     }
   }
 
-  return { error: `Kontingent erschöpft (Sitzung ${nextNum}, max. ${boundary || 0} bewilligt)` };
+  return { error: `Kontingent erschöpft (Stunde ${Math.ceil(startHour)}, max. ${boundary || 0} bewilligt)` };
 }
 
 /**
@@ -478,21 +480,28 @@ export function getPhaseStats(patientId, data) {
 
   const bew = patient.bewilligt || createDefaultBewilligt();
   const sessions = data.sessions.filter(s => s.patientId === patientId);
-  const probaCount = sessions.filter(s => s.phase === 'probatorik').length;
-  const nonProba = sessions.filter(s => s.phase !== 'probatorik').length;
+  // Zählung in THERAPIESTUNDEN (duration / 50), NICHT in Sitzungen.
+  // Eine Doppelsitzung (100 min) zählt als 2 Stunden, eine Sitzung à 200 min
+  // als 4 Stunden. Die Phasengrenzen (12, 24, 60, 80) sind in Stunden definiert.
+  const probaHours = sessions
+    .filter(s => s.phase === 'probatorik')
+    .reduce((sum, s) => sum + s.duration / 50, 0);
+  const therapyHours = sessions
+    .filter(s => s.phase !== 'probatorik')
+    .reduce((sum, s) => sum + s.duration / 50, 0);
 
   // Alle fünf Phasen IMMER mit Eintrag zurückgeben. `bewilligt`-Flag
   // signalisiert dem Renderer, ob Balken oder "nicht bewilligt" gezeigt wird.
   // Probatorik ist als Grundversorgung immer "verfügbar" (braucht keine Bewilligung).
   const stats = {
-    probatorik: { count: probaCount, max: 8, bewilligt: true },
+    probatorik: { count: probaHours, max: 8, bewilligt: true },
     kzt1: { count: 0, max: 12, bewilligt: !!bew.kzt1 },
     kzt2: { count: 0, max: 12, bewilligt: !!bew.kzt2 },
     lzt: { count: 0, max: 0, bewilligt: !!bew.lzt },
     lzt_v: { count: 0, max: 0, bewilligt: !!bew.lztV },
   };
 
-  let remaining = nonProba;
+  let remaining = therapyHours;
 
   if (bew.kzt1) {
     stats.kzt1.count = Math.min(remaining, 12);

@@ -626,7 +626,7 @@ function updateSessionPhaseInfo() {
   } else {
     infoEl.style.background = 'var(--gray-100)';
     infoEl.style.color = 'var(--gray-700)';
-    infoEl.textContent = `→ ${result.label}, Sitzung ${result.number} von ${result.max}`;
+    infoEl.textContent = `→ ${result.label}, Stunde ${result.number} von ${result.max}`;
   }
 }
 

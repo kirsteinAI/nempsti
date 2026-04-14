@@ -156,12 +156,12 @@ export function renderDashboard() {
       if (bew.lzt) kontingent = bew.lztMax || 60;
       if (bew.lztV) kontingent = bew.lztVMax || 80;
 
-      // Aktuelle Phase bestimmen
+      // Aktuelle Phase bestimmen (basierend auf Therapiestunden-Verteilung)
       const stats = getPhaseStats(p.id, data);
       let phaseLabel = '';
       if (stats) {
-        const nonProbaCount = data.sessions.filter(s => s.patientId === p.id && s.phase !== 'probatorik').length;
-        if (nonProbaCount === 0) {
+        const hasTherapyHours = (stats.kzt1.count + stats.kzt2.count + stats.lzt.count + stats.lzt_v.count) > 0;
+        if (!hasTherapyHours) {
           phaseLabel = stats.probatorik.count > 0 ? 'Probatorik' : '';
         } else if (stats.lzt_v.bewilligt && stats.lzt_v.count > 0) { phaseLabel = 'LZT-V'; }
         else if (stats.lzt.bewilligt && stats.lzt.count > 0) { phaseLabel = 'LZT'; }
@@ -247,14 +247,18 @@ export function showPatientDetail(patientId) {
   const supervisions = getPatientSupervisions(patientId);
   const bew = p.bewilligt || createDefaultBewilligt();
 
-  // Gesamtkontingent aus bewilligt
-  let kontingent = 12;
+  // Gesamtkontingent aus bewilligt (in Therapiestunden)
+  let kontingent = 0;
+  if (bew.kzt1) kontingent = 12;
   if (bew.kzt2) kontingent = 24;
   if (bew.lzt) kontingent = bew.lztMax || 60;
   if (bew.lztV) kontingent = bew.lztVMax || 80;
 
-  const nonProbaCount = data.sessions.filter(s => s.patientId === patientId && s.phase !== 'probatorik').length;
-  const kontingentPct = kontingent > 0 ? Math.min(100, (nonProbaCount / kontingent) * 100) : 0;
+  // Laufender Therapiestunden-Zähler (Doppelsitzung zählt als 2 Std.)
+  const therapyHours = data.sessions
+    .filter(s => s.patientId === patientId && s.phase !== 'probatorik')
+    .reduce((sum, s) => sum + s.duration / 50, 0);
+  const kontingentPct = kontingent > 0 ? Math.min(100, (therapyHours / kontingent) * 100) : 0;
   const svPct = status.required > 0 ? Math.min(100, (status.supervisionHours / status.required) * 100) : 100;
 
   let svBarColor = 'var(--success)';
@@ -271,6 +275,9 @@ export function showPatientDetail(patientId) {
     lzt_v: 'LZT-Verlängerung',
   };
   const phaseOrder = ['probatorik', 'kzt1', 'kzt2', 'lzt', 'lzt_v'];
+
+  // Zahlenformatierung: Ganzzahl als "5", Bruch als "5.5"
+  const fmt = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1);
 
   let phaseBarsHtml = '';
   if (stats) {
@@ -290,7 +297,7 @@ export function showPatientDetail(patientId) {
         continue;
       }
 
-      // Bewilligt → Balken + "X / Y Sitzungen"
+      // Bewilligt → Balken + "X / Y Stunden"
       const pct = s.max > 0 ? Math.min(100, (s.count / s.max) * 100) : 0;
       const done = s.max > 0 && s.count >= s.max;
       const color = done ? 'var(--success)' : 'var(--primary)';
@@ -298,7 +305,7 @@ export function showPatientDetail(patientId) {
         <div style="margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;font-size:0.82rem;">
             <span>${phaseLabels[key]}</span>
-            <span>${s.count} / ${s.max}${done ? ' ✓' : ''}</span>
+            <span>${fmt(s.count)} / ${fmt(s.max)}${done ? ' ✓' : ''}</span>
           </div>
           <div class="supervision-ratio-bar">
             <div class="supervision-ratio-fill" style="width:${pct}%;background:${color}"></div>
@@ -344,9 +351,9 @@ export function showPatientDetail(patientId) {
     </div>
 
     <div class="card">
-      <div class="card-title">Kontingent (${nonProbaCount} / ${kontingent} Sitzungen)</div>
+      <div class="card-title">Kontingent (${fmt(therapyHours)} / ${kontingent} Std.)</div>
       <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:4px;">
-        <span>${nonProbaCount} von ${kontingent} Sitzungen</span>
+        <span>${fmt(therapyHours)} von ${kontingent} Therapiestunden</span>
         <span>${kontingentPct.toFixed(0)}%</span>
       </div>
       <div class="supervision-ratio-bar">
