@@ -162,13 +162,11 @@ export function renderDashboard() {
       if (stats) {
         const nonProbaCount = data.sessions.filter(s => s.patientId === p.id && s.phase !== 'probatorik').length;
         if (nonProbaCount === 0) {
-          const probaCount = stats.probatorik ? stats.probatorik.count : 0;
-          phaseLabel = probaCount > 0 ? 'Probatorik' : '';
-        } else if (stats.lzt_v && stats.lzt_v.count > 0) { phaseLabel = 'LZT-V'; }
-        else if (stats.lzt && stats.lzt.count > 0 && stats.lzt.count < stats.lzt.max) { phaseLabel = 'LZT'; }
-        else if (stats.lzt && stats.lzt.count >= stats.lzt.max) { phaseLabel = 'LZT-V'; }
-        else if (stats.kzt2 && stats.kzt2.count > 0) { phaseLabel = 'KZT 2'; }
-        else { phaseLabel = 'KZT 1'; }
+          phaseLabel = stats.probatorik.count > 0 ? 'Probatorik' : '';
+        } else if (stats.lzt_v.bewilligt && stats.lzt_v.count > 0) { phaseLabel = 'LZT-V'; }
+        else if (stats.lzt.bewilligt && stats.lzt.count > 0) { phaseLabel = 'LZT'; }
+        else if (stats.kzt2.bewilligt && stats.kzt2.count > 0) { phaseLabel = 'KZT 2'; }
+        else if (stats.kzt1.bewilligt && stats.kzt1.count > 0) { phaseLabel = 'KZT 1'; }
       }
 
       let badgeClass = 'badge-ok';
@@ -278,19 +276,23 @@ export function showPatientDetail(patientId) {
   if (stats) {
     for (const key of phaseOrder) {
       const s = stats[key];
-      if (!s) {
-        // Phase nicht bewilligt — nur anzeigen wenn sie in der Sequenz vor einer bewilligten liegt
-        if (key === 'kzt2' && !bew.kzt2) {
-          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
-        } else if (key === 'lzt' && !bew.lzt) {
-          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
-        } else if (key === 'lzt_v' && !bew.lztV) {
-          phaseBarsHtml += `<div style="margin-bottom:8px;opacity:0.5;"><div style="display:flex;justify-content:space-between;font-size:0.82rem;"><span>${phaseLabels[key]}</span><span style="color:var(--gray-400);">nicht bewilligt</span></div></div>`;
-        }
+      if (!s) continue;
+
+      if (!s.bewilligt) {
+        // Nicht bewilligt → ausgegraute Zeile ohne Balken
+        phaseBarsHtml += `
+          <div style="margin-bottom:8px;opacity:0.5;">
+            <div style="display:flex;justify-content:space-between;font-size:0.82rem;">
+              <span>${phaseLabels[key]}</span>
+              <span style="color:var(--gray-400);">nicht bewilligt</span>
+            </div>
+          </div>`;
         continue;
       }
+
+      // Bewilligt → Balken + "X / Y Sitzungen"
       const pct = s.max > 0 ? Math.min(100, (s.count / s.max) * 100) : 0;
-      const done = s.count >= s.max;
+      const done = s.max > 0 && s.count >= s.max;
       const color = done ? 'var(--success)' : 'var(--primary)';
       phaseBarsHtml += `
         <div style="margin-bottom:8px;">

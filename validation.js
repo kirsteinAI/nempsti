@@ -481,34 +481,40 @@ export function getPhaseStats(patientId, data) {
   const probaCount = sessions.filter(s => s.phase === 'probatorik').length;
   const nonProba = sessions.filter(s => s.phase !== 'probatorik').length;
 
-  const hasKzt = bew.kzt1 && !bew.lzt;
-  const hasLzt = bew.lzt;
-
+  // Alle fünf Phasen IMMER mit Eintrag zurückgeben. `bewilligt`-Flag
+  // signalisiert dem Renderer, ob Balken oder "nicht bewilligt" gezeigt wird.
+  // Probatorik ist als Grundversorgung immer "verfügbar" (braucht keine Bewilligung).
   const stats = {
-    probatorik: { count: probaCount, max: 8 },
+    probatorik: { count: probaCount, max: 8, bewilligt: true },
+    kzt1: { count: 0, max: 12, bewilligt: !!bew.kzt1 },
+    kzt2: { count: 0, max: 12, bewilligt: !!bew.kzt2 },
+    lzt: { count: 0, max: 0, bewilligt: !!bew.lzt },
+    lzt_v: { count: 0, max: 0, bewilligt: !!bew.lztV },
   };
 
   let remaining = nonProba;
 
   if (bew.kzt1) {
-    stats.kzt1 = { count: Math.min(remaining, 12), max: 12 };
+    stats.kzt1.count = Math.min(remaining, 12);
     remaining = Math.max(0, remaining - 12);
 
     if (bew.kzt2) {
-      stats.kzt2 = { count: Math.min(remaining, 12), max: 12 };
+      stats.kzt2.count = Math.min(remaining, 12);
       remaining = Math.max(0, remaining - 12);
     }
   }
 
   if (bew.lzt) {
     const kztTotal = (bew.kzt1 ? 12 : 0) + (bew.kzt2 ? 12 : 0);
-    const lztSlots = (bew.lztMax || 60) - kztTotal;
-    stats.lzt = { count: Math.min(remaining, Math.max(0, lztSlots)), max: Math.max(0, lztSlots) };
-    remaining = Math.max(0, remaining - Math.max(0, lztSlots));
+    const lztSlots = Math.max(0, (bew.lztMax || 60) - kztTotal);
+    stats.lzt.max = lztSlots;
+    stats.lzt.count = Math.min(remaining, lztSlots);
+    remaining = Math.max(0, remaining - lztSlots);
 
     if (bew.lztV) {
-      const lztVSlots = (bew.lztVMax || 80) - (bew.lztMax || 60);
-      stats.lzt_v = { count: Math.min(remaining, Math.max(0, lztVSlots)), max: Math.max(0, lztVSlots) };
+      const lztVSlots = Math.max(0, (bew.lztVMax || 80) - (bew.lztMax || 60));
+      stats.lzt_v.max = lztVSlots;
+      stats.lzt_v.count = Math.min(remaining, lztVSlots);
     }
   }
 
